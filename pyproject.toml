@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kijito-claude"
 version = "0.1.0"
-description = "Installer for the kijito-claude toolkit — context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
+description = "Installer for the kijito-claude toolkit: context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0"
