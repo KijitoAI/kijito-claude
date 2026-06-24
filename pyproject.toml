@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kijito-claude"
+version = "0.1.0"
+description = "Installer for the kijito-claude toolkit — context tracking, session catch-up, and self-clear scripts plus the Kijito skills, deployed into ~/.claude."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Arcada Labs", email = "jason@arcadalabs.com" }]
+keywords = ["kijito", "claude", "claude-code", "anthropic", "installer", "cli", "skills"]
+dependencies = []
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Build Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/KijitoAI/kijito-claude"
+Repository = "https://github.com/KijitoAI/kijito-claude"
+"Bug Tracker" = "https://github.com/KijitoAI/kijito-claude/issues"
+
+[project.scripts]
+kijito-claude = "kijito_claude.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kijito_claude"]
+
+# The bash scripts, skills, install.sh, and the CLAUDE.md snippet live at the repo root so
+# they double as the git-clone install path. Pull them into the wheel under the package so
+# importlib.resources can find them at runtime.
+[tool.hatch.build.targets.wheel.force-include]
+"scripts" = "kijito_claude/_assets/scripts"
+"skills" = "kijito_claude/_assets/skills"
+"install.sh" = "kijito_claude/_assets/install.sh"
+"CLAUDE.md.snippet" = "kijito_claude/_assets/CLAUDE.md.snippet"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/",
+  "scripts/",
+  "skills/",
+  "install.sh",
+  "CLAUDE.md.snippet",
+  "README.md",
+  "LICENSE",
+  "NOTICE",
+]

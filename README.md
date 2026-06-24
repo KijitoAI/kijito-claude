@@ -31,15 +31,28 @@ default; a notes file works in standalone mode.
 
 ## Install
 
+From source:
+
 ```bash
 git clone https://github.com/KijitoAI/kijito-claude
 cd kijito-claude && ./install.sh
 ```
 
-The installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, and
-merges the keys it needs into `settings.json`. It backs up `settings.json` and merges with `jq`, so
-it leaves your existing settings alone and is safe to re-run, including on other machines. Requires
-`jq`. The autonomy features require `tmux`.
+Or, once the v0.1 packages are published, with a package runner (no clone needed):
+
+```bash
+npx kijito-claude       # via npm
+pipx run kijito-claude  # via PyPI  (uvx kijito-claude also works)
+```
+
+Both package runners do the same thing as the from-source install: they bundle the scripts and
+skills and run `install.sh`. They need `bash`, so on Windows run them inside WSL (see Platform
+support).
+
+The installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
+the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It
+backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is safe
+to re-run, including on other machines. Requires `jq`. The autonomy features require `tmux`.
 
 ## Platform support
 

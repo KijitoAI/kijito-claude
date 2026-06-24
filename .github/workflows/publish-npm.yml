@@ -1,0 +1,26 @@
+name: publish-npm
+
+# Publishes kijito-claude to npm on a version tag, using Trusted Publishing (OIDC).
+# No NPM_TOKEN is stored — npm exchanges a short-lived workflow credential and attaches
+# provenance automatically. Configure the trusted publisher once on npmjs.com first:
+# npmjs.com -> the package/org -> Settings -> Trusted Publisher -> this repo + workflow.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for Trusted Publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"        # Trusted Publishing needs Node >=22.14 on the runner
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - run: npm publish --access public

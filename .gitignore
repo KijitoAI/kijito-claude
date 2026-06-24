@@ -5,3 +5,11 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# build artifacts (npm + python packaging). package-lock.json IS committed (npm ci needs it).
+node_modules/
+*.tgz
+dist/
+build/
+*.egg-info/
+.venv/

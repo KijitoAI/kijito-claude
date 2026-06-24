@@ -1,0 +1,41 @@
+{
+  "name": "kijito-claude",
+  "version": "0.1.0",
+  "description": "Installer for the kijito-claude toolkit — copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "bin": {
+    "kijito-claude": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "skills/",
+    "install.sh",
+    "CLAUDE.md.snippet"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KijitoAI/kijito-claude.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KijitoAI/kijito-claude/issues"
+  },
+  "homepage": "https://github.com/KijitoAI/kijito-claude#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "skills",
+    "cli",
+    "installer",
+    "context-window",
+    "kijito"
+  ],
+  "scripts": {
+    "prepublishOnly": "npm pack --dry-run"
+  }
+}
