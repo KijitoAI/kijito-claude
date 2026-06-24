@@ -1,12 +1,17 @@
 name: publish-npm
 
-# Publishes kijito-claude to npm on a version tag, using Trusted Publishing (OIDC).
-# No NPM_TOKEN is stored — npm exchanges a short-lived workflow credential and attaches
-# provenance automatically. Configure the trusted publisher once on npmjs.com first:
-# npmjs.com -> the package/org -> Settings -> Trusted Publisher -> this repo + workflow.
+# Publishes kijito-claude to npm using Trusted Publishing (OIDC) — no NPM_TOKEN stored;
+# npm exchanges a short-lived workflow credential and attaches provenance automatically.
+#
+# MANUAL-ONLY until the package exists: npm cannot publish a brand-new package via trusted
+# publishing — the package must already exist before you can attach a trusted publisher. So
+# the FIRST publish is a one-time local `npm publish --access public` (with 2FA). After that,
+# configure the trusted publisher (npmjs.com -> package -> Settings -> Trusted Publisher ->
+# this repo + workflow) and re-enable the tag trigger below for future releases:
+#   on:
+#     push:
+#       tags: ["v*"]
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
