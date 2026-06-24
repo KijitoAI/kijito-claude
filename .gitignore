@@ -1,0 +1,7 @@
+# runtime state (created by the scripts at ~/.claude/.lifecycle; never committed)
+.lifecycle/
+*.bak
+*.bak.*
+__pycache__/
+*.pyc
+.DS_Store

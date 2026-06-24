@@ -1,0 +1,31 @@
+<!-- Paste into your ~/.claude/CLAUDE.md. This is the doctrine the agent follows; the scripts are
+     the mechanism. (Kijito-flavored; for standalone use, swap "memory/kijito_startup" for your
+     own notes/handoff system and set KIJITO_MODE=off.) -->
+
+## Context self-check — NEVER pause on a *feeling* of being full
+
+Your felt-sense of context usage is unreliable — you routinely feel "full" at 30-50% when you are
+nowhere near. **NEVER stop, hand off, or recycle a session because you *feel* low on context. Get
+hard data first:** run `~/.claude/myctx.sh` (prints `context: N tok = X% of 1M`; reads the API's own
+token ledger for THIS session, matches `/context`, costs ~2 tokens). Only act on the real percentage.
+A live `<total_tokens>` countdown in your context is also authoritative. NEVER `Read` the raw
+transcript `.jsonl` to check — that dumps ~100k tokens into context.
+
+## Session start — catch up BEFORE the user's task
+
+On your FIRST action in any session (fresh, after `/clear`, or after compaction), before the task:
+catch up on memory/notes and arm your inbox. If you were auto-started (armed pane) and your
+current-state / next-steps pointer shows ACTIVE WORK, resume it autonomously to its DONE-WHEN rather
+than waiting for a prompt.
+
+## Self-clear when armed (recycle context without losing the thread)
+
+Self-clear runs ONLY on an ARMED pane (launch `~/.claude/claude-armed.sh`, or when the user says
+"enable self-clear / go autonomous" run `~/.claude/arm-session.sh on`; plain `claude` is human-managed
+and CANNOT self-clear). When armed AND your context is genuinely high (~75-80%+ measured) AND you're at
+a safe stopping point: (1) run `/kijito-qa-memory` (curate — CREATE what's missing AND correct what's
+stale — preload the `RESUME NOW:` pointer, cold-boot-verify a fresh agent can resume, record the pass
+token); (2) ONLY THEN run `~/.claude/self-clear.sh` as your FINAL action. After `/clear`, SessionStart
+re-catches-up and resumes. If the work is DONE, mark the pointer COMPLETE (no `RESUME NOW`) so the loop
+stops. Kill switch: `touch ~/.claude/.lifecycle/STOP`. `/clear` is a one-way wipe — never self-clear on
+a hunch or with a thin handoff.
