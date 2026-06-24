@@ -6,6 +6,11 @@ use, and recycle its context at high usage without losing the working state. It 
 [Kijito](https://kijito.ai) as the memory backend by default, and also runs standalone (see
 "Running without Kijito").
 
+Everything here is optional. The catch-up and curation steps are a handful of memory calls you can
+run by hand; the scripts and the two skills just make the routine uniform and easy to deploy across
+machines. Install only the pieces you want — the context check stands alone, the autonomy harness is
+opt-in per pane, and the skills are convenience wrappers, not requirements.
+
 ## Components
 
 | Component | What it does | Needs Kijito |
@@ -14,7 +19,12 @@ use, and recycle its context at high usage without losing the working state. It 
 | Session catch-up (`session-catchup-hint.sh`, a SessionStart hook) | Each session catches up on memory and notes before it starts on the task. | Optional |
 | Armed-pane autonomy (`claude-armed.sh`, `arm-session.sh`, `session-autosend.sh`) | An armed tmux pane sends itself a first prompt and continues preloaded work. Arming is per pane, so one pane can run unattended while you drive another. | Optional |
 | Self-clear loop (`self-clear.sh`, `lifecycle-lib.sh`, `kijito-qa-pass.sh`) | At high measured context, the session curates memory, confirms a fresh session can resume, runs `/clear`, then catches up again and continues. Gated so it will not clear with unsaved work. | Optional (see note) |
+| `kijito-start` skill | The active, thorough version of session catch-up: load memory, read the current-state pointer and recent lessons, arm the inbox, and resume active work — or, for a new persona, set up identity and the pointer. | Yes |
 | `kijito-qa-memory` skill | Memory curation that requires writing the new memories (not only fixing existing ones), then uses a fresh subagent to confirm a cold start can reconstruct the work. | Yes |
+
+The two skills are conveniences, not the only way in: an agent can run the same catch-up and
+curation by hand from a few prompts. They are packaged as skills because that makes them simple to
+drop into `~/.claude/skills/` and invoke the same way everywhere.
 
 The self-clear loop needs some durable store to carry the handoff across `/clear`. That is Kijito by
 default; a notes file works in standalone mode.
@@ -22,13 +32,31 @@ default; a notes file works in standalone mode.
 ## Install
 
 ```bash
-git clone https://github.com/ArcadaLabs-Jason/kijito-claude
+git clone https://github.com/KijitoAI/kijito-claude
 cd kijito-claude && ./install.sh
 ```
 
-The installer copies the scripts to `~/.claude/` and merges the keys it needs into `settings.json`.
-It backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is
-safe to re-run, including on other machines. Requires `jq`. The autonomy features require `tmux`.
+The installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, and
+merges the keys it needs into `settings.json`. It backs up `settings.json` and merges with `jq`, so
+it leaves your existing settings alone and is safe to re-run, including on other machines. Requires
+`jq`. The autonomy features require `tmux`.
+
+## Platform support
+
+The scripts are POSIX-style `bash` and avoid GNU-only flags (epoch and timestamp formatting work on
+both BSD and GNU `date`), so they run the same on Linux and macOS.
+
+| Platform | Context check | Catch-up + skills | Armed-pane autonomy / self-clear |
+|---|---|---|---|
+| Linux | yes | yes | yes (needs `tmux`) |
+| macOS | yes | yes | yes (needs `tmux`) |
+| Windows via WSL | yes | yes | yes — run `claude` inside the WSL distro, where `tmux` works |
+| Windows native (no WSL) | with Git Bash | with Git Bash | no — `tmux` is not available |
+
+On Windows, use WSL: install and launch `claude` inside the Linux distro and everything works as it
+does on native Linux. The autonomy harness drives a session by typing into its own `tmux` pane, which
+has no native-Windows equivalent, so without WSL only the context check and the by-hand catch-up
+apply. Requirements everywhere: `bash` and `jq`; add `tmux` for the autonomy features.
 
 ## Managed vs. autonomous panes
 
