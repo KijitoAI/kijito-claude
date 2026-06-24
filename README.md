@@ -49,4 +49,5 @@ A pane may `/clear` itself **only** after: (1) `/kijito-qa-memory` curates + pre
 
 ## License
 
-MIT — © 2026 Arcada Labs.
+Apache License 2.0 — © 2026 Arcada Labs. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+(Apache 2.0 for its explicit patent grant + retaliation clause — appropriate for patent-holding projects.)
