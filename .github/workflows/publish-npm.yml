@@ -3,11 +3,12 @@ name: publish-npm
 # Publishes kijito-claude to npm using Trusted Publishing (OIDC) — no NPM_TOKEN stored;
 # npm exchanges a short-lived workflow credential and attaches provenance automatically.
 #
-# v0.1.0 was published manually (npm can't OIDC-publish a brand-new package). For this tag
-# trigger to work on future releases, configure the trusted publisher once on npmjs.com:
-# package page -> Settings -> Trusted Publisher -> this repo (KijitoAI/kijito-claude) +
-# workflow file publish-npm.yml. Until that's set, a v* tag will fail the npm job; the PyPI
-# job is independent and unaffected.
+# v0.1.0 was published manually (npm can't OIDC-publish a brand-new package). The trusted
+# publisher IS configured on npmjs.com (KijitoAI/kijito-claude + publish-npm.yml). The v0.1.1
+# tag still failed with "E404 PUT ... not in this registry" — that was NOT a config problem:
+# node 22 bundles npm 10.x, and OIDC Trusted Publishing needs npm >=11.5.1, so the CLI did an
+# unauthenticated publish (404). The `npm install -g npm@latest` step below is the fix. The
+# PyPI job is independent and unaffected.
 on:
   push:
     tags: ["v*"]
@@ -26,5 +27,11 @@ jobs:
         with:
           node-version: "22"        # Trusted Publishing needs Node >=22.14 on the runner
           registry-url: "https://registry.npmjs.org"
+      # Node 22 bundles npm 10.x, but OIDC Trusted Publishing needs npm >=11.5.1 — without
+      # this the CLI silently skips the OIDC exchange and does an UNauthenticated publish,
+      # which the registry answers with a 404 (not 401). This step is the actual fix for the
+      # v0.1.1 "E404 PUT ... not in this registry" failure; the trusted publisher itself was
+      # configured correctly.
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm publish --access public
