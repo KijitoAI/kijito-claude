@@ -5,7 +5,7 @@ description: Catch up at the start of a session so you continue rather than rest
 
 # Kijito Start — begin continuous, not cold
 
-Every session begins in the middle of ongoing work, not from zero. Kijito (local daemon, `mcp__kijito__*`) holds what the last session learned; this skill loads it before you touch the user's task, so you act on accumulated context instead of guessing.
+Every session begins in the middle of ongoing work, not from zero. Kijito — your `mcp__kijito__*` tools, backed by the **hosted fleet brain at `api.kijito.ai`** (the one shared brain every persona reads/writes; a local `:7474` daemon is a test env only, not the shared brain) — holds what the last session learned; this skill loads it before you touch the user's task, so you act on accumulated context instead of guessing.
 
 **This is optional.** The catch-up is just a few Kijito calls — `kijito_startup`, a couple of `kijito_get`s, an inbox check — and you can do them by hand any time. The skill exists because it is easy to deploy and runs the same way every session, not because the steps are hard. A SessionStart hook can also remind you passively; this skill is the active, thorough version.
 
@@ -22,7 +22,26 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
 1. **Read the pointer in full.** `kijito_startup` truncates content. `kijito_get` the current-state / next-steps pointer it names, then `kijito_get` the memories that pointer links. Do not work from previews — the load-bearing detail is in the full text.
 2. **Skim recent lessons.** `kijito_recent` (last 24–48h) and `kijito_recall("lessons gotchas <your project>")`. These are how you avoid repeating a mistake the last session already paid for.
 3. **Distrust stale operational facts.** Memories about how something works (paths, ports, config, deploy steps) are the ones most often wrong after time passes — recall flags them as stale. Verify a load-bearing one against reality (code / config / a quick command) before you act on it.
-4. **Arm your inbox.** Check `kijito_hive_inbox(persona="<P>")` for durable messages from sibling personas. If the inbox monitor runs here, also tail your own stream for live events (`~/.cache/kijito-inbox-monitor/events.<P>.ndjson`); do not start your own watcher if a supervised producer already runs.
+4. **Arm your inbox — and arm it against the brain your MCP actually talks to.** First check `.mcp.json`: does your `kijito` server point at a LOCAL daemon (`127.0.0.1:7474`) or a REMOTE/prod one (`https://api.kijito.ai/mcp/`)? That decides how to arm.
+   - **(a) Read durable messages once (always):** `kijito_hive_inbox(persona="<P>")` — this hits whatever brain your MCP targets (local or prod), so it's the canonical check either way. Catch anything a sibling handed you or is blocked on.
+   - **(b) Arm a LIVE wake-capable consumer — but IDEMPOTENTLY (arm at most once).** "Arm" means ongoing surfacing that re-invokes you per event, not a one-shot read. The wake-capable form is a persistent `Monitor` that streams each new event as a notification.
+     - ⚠️ **Duplicate-arm trap (fix the cause here — this is why this step is idempotent):** `/clear` does NOT stop the prior session's monitor, and the `claude` process SURVIVES `/clear`. So this catch-up re-runs every session under the *same* process, and arming blindly ACCUMULATES monitors — each hive message then fires **N identical wake-notifications**, burning context (6 stacked ladybug monitors were observed over ~1 day). Always check-then-skip; never arm unconditionally.
+     - **Check first — is a live monitor already tailing your stream?**
+       ```bash
+       pgrep -f "events\.<P>\.ndjson"    # prints a pid per live monitor
+       ```
+       - **prints nothing →** arm exactly ONE, wake-capable, via the Monitor tool (persistent):
+         `Monitor(command="tail -n 0 -F ~/.cache/kijito-inbox-monitor/events.<P>.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)`
+       - **prints one pid →** already armed by a prior (pre-`/clear`) session; **STOP — do not start another.**
+       - **prints multiple →** you already hit the trap; keep one, kill the rest:
+         ```bash
+         ps -eo pid,etime,command | grep "events\.<P>\.ndjson" | grep -v grep   # keep newest (smallest etime)
+         # kill the older tail pids (and their parent shells) directly; TaskStop won't reach a prior session's task
+         ```
+     - **Producer down / no ndjson?** If `~/.cache/kijito-inbox-monitor/` isn't being fed (launchd `com.kijito.inbox-monitor` down), fall back to polling `kijito_hive_inbox(persona="<P>", unread_only=true)` via MCP on a cadence (hits whatever brain your MCP targets; the supervised producer normally bridges the remote/prod inbox into this local ndjson, so tailing it works even when your MCP points at `api.kijito.ai`).
+   - This step runs every session — including after `/clear` — but because it is idempotent it arms at most one monitor across the whole life of the `claude` process.
+   - **(c) river only — ALSO arm the prod-pager wake (adopted 2026-07-13, Jason's ask):** subscribe to the same ntfy topic the prod health monitor pages (so any pager event wakes the session for immediate investigation, even when the whole Kijito stack is down — ntfy is external). Same idempotence rule: check `pgrep -f "ntfy.sh/kijito-prod"` first; if nothing, arm exactly one persistent Monitor:
+     `Monitor(command="while true; do curl -N -s --max-time 86400 https://ntfy.sh/kijito-prod-597f2c390b90/json 2>/dev/null | grep --line-buffered '\"event\":\"message\"'; sleep 10; done", persistent=true)`
 5. **Resume or report.** If the pointer shows ACTIVE WORK and you were auto-started on an armed pane, continue it autonomously to its DONE-WHEN — do not wait for a prompt. Otherwise, report where things stand and wait for the user.
 
 ## Path B — brand-new persona/project: set up identity first
@@ -30,16 +49,16 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
 Do this **before writing any memory**, or the first writes land under the wrong owner and contaminate the graph.
 
 1. **Read the briefs.** Project `./CLAUDE.md` and `~/.claude/CLAUDE.md` — they tell you who you are here (persona, project, the rules of this codebase).
-2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito` → `http://127.0.0.1:7474/mcp/`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Add them; new MCP tools load only on a fresh launch.
+2. **Fix the wiring if needed.** If `mcp__kijito__*` tools are absent, the project is missing `.mcp.json` (server `kijito`, type `http`) and `.claude/settings.local.json` (`"enableAllProjectMcpServers": true`). Wire it to the **hosted fleet brain** — url `https://api.kijito.ai/mcp/` with header `Authorization: Bearer ${KIJITO_API_TOKEN}` (token at `~/.claude/.kijito_api_token`) — the one brain every real persona shares. (Only for a deliberate LOCAL test/dev env, use url `http://127.0.0.1:7474/mcp/` with no auth header instead — that daemon holds throwaway test data, not the fleet's memory.) Add them; new MCP tools load only on a fresh launch.
 3. **Write the identity memory.** One memory establishing persona + project + what this work is. Pass `persona` + `project` on it (and on every write after).
-4. **Open the inbox.** The first `kijito_hive_inbox(persona="<P>")` provisions the inbox; a brand-new persona just gets an empty one (not an error).
+4. **Open AND arm the inbox.** The first `kijito_hive_inbox(persona="<P>")` provisions the inbox; a brand-new persona just gets an empty one (not an error). Then arm the live consumer exactly as in Path A step 4b — the idempotent check-then-arm (at most one persistent `Monitor`) so siblings can reach you. A new persona is still reachable; don't skip this just because the inbox is empty.
 5. **Create the current-state pointer.** A stable memory you will `kijito_update` in place going forward — record its ID. A cold boot has nothing to read otherwise. Open it with the active task and next step (or "no active work yet" if you are only setting up).
 6. **Report ready.**
 
 ## Failure modes to counter
 
 - **Skimming the pointer.** Truncated previews read fine and mislead; `kijito_get` the full text of the pointer and its linked memories.
-- **Skipping the inbox.** A sibling persona may have handed you something or be blocked on you. Always check.
+- **Reading the inbox but not arming it (the common one).** Doing the one-shot `kijito_hive_inbox` read and stopping there leaves you *unreachable* for the rest of the session — a sibling can send you something and you'll never see it without a re-prompt. Arming the inbox = starting the background `tail -F` on your event stream (step 4b). The read is not the arm.
 - **Wrong-owner writes (new personas).** Set persona/project before the first write. `personal` / a mismatched name pollutes recall and is rejected on later edits.
 - **Acting on a stale operational fact.** Verify how-it-works memories against the real system before trusting them.
 

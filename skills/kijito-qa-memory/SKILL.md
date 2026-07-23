@@ -5,7 +5,7 @@ description: Rigorous Kijito memory curation with enforced creation + cold-boot 
 
 # Kijito QA Memory — curate the graph, then PROVE it works cold
 
-Kijito (local daemon, `mcp__kijito__*`) is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
+Kijito — your `mcp__kijito__*` tools, backed by the **hosted fleet brain at `api.kijito.ai`** (the one shared brain; a local `:7474` daemon is a test env only) — is the only thing that survives a `/clear` or a new session. "QA memory" is not "fix a few wrong notes" — it is **make the graph match what this session actually learned, then confirm a cold agent can act on it.** Pass your persona/project on every write.
 
 ## The bias this skill exists to defeat
 
