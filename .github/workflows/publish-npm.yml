@@ -26,11 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"        # Trusted Publishing needs Node >=22.14 on the runner
-          # NO registry-url: setting it makes setup-node write an .npmrc auth line using
-          # NODE_AUTH_TOKEN, which defaults to the placeholder "XXXXX-XXXXX-XXXXX-XXXXX" when
-          # no token is supplied. npm then sends that FAKE token and never attempts the OIDC
-          # exchange → registry 404. Omitting it leaves the default registry (npmjs.org) with
-          # no token, so npm >=11.5.1 uses OIDC Trusted Publishing as intended.
+          registry-url: "https://registry.npmjs.org"
       # Node 22 bundles npm 10.x, but OIDC Trusted Publishing needs npm >=11.5.1.
       - run: npm install -g npm@latest
       - run: npm ci
