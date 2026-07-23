@@ -1,6 +1,6 @@
 {
   "name": "kijito-claude",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Installer for the kijito-claude toolkit: copies the context-tracking, session catch-up, and self-clear scripts plus the Kijito skills into ~/.claude.",
   "license": "Apache-2.0",
   "type": "commonjs",
