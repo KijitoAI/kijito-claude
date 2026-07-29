@@ -65,7 +65,14 @@ Compare its report to ground truth:
 
 ⚠️ **This is the difference between a loop that terminates and one that doesn't.** Fixing only the named instance makes each round surface one more member of the same class, so the loop runs **O(instances) instead of O(classes)** — and it looks like diligence the entire way, which is why nobody notices they are paying it. Measured: one class, closable by a single sweep on round one, instead consumed 5 rounds / 10 verifiers / ~2 hours.
 
-**2-green:** repeat Phase 4 until two consecutive cold boots reconstruct cleanly. Finding any issue resets the count.
+**2-green:** repeat Phase 4 until two consecutive cold boots reconstruct cleanly.
+
+⚠️ **SEVERITY GATE — ONLY A FINDING THAT WOULD CAUSE A WRONG ACTION OR DAMAGE RESETS THE COUNT.** Everything else — an ambiguity, a cosmetic inconsistency, a "could be clearer" — is **DISCLOSED in the handoff as known-open** and does **not** reset. Ask of each finding: *"would a cold agent acting on this do the wrong thing?"* If no, write it down and move on.
+
+⛔ **HARD CAP: 3 rounds.** At the cap, stop, write every residual into the handoff, and mark the pass COMPLETE. **A residual you have DISCLOSED is not a residual you have hidden.**
+
+★ **WHY THIS EXISTS — the loop is otherwise NON-TERMINATING BY CONSTRUCTION.** "Any issue resets" plus an adversarial verifier on a rich document means findings are *always* available, so termination depends on the reviewer running out of things to say. Measured on one session: **6 rounds, 11 verifiers, half a context, zero QA output** — and separately a **17-round** review asymptote. **The loop conflates DISCLOSED with FIXED: a stated gap costs one sentence, fixing it costs a whole round.**
+⚠️ **"A stronger model converges in one pass" is NOT the fix** — it makes the stopping condition depend on the agent's judgement, which is model-dependent and invisible. **A control that depends on the agent choosing to stop is advice, not a guard.**
 
 ## Done report
 
