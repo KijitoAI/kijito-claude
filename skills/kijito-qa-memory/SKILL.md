@@ -25,11 +25,17 @@ For each candidate ask: **"Is this already an atomic memory?"** If not, write it
 - front-load the exact words a later search/teammate would use;
 - set `persona` + `project`; pick honest `importance` (don't inflate; 0.85+ never decays).
 
-Then apply the **completeness gate**, out loud: *"What did I learn this session that is NOT yet written?"* — and EXPECT to find gaps. List them, write them. Only move on when that question returns nothing.
+Then apply the **completeness gate**, out loud — **both halves, because the second is the one that gets skipped**:
+1. **EXISTENCE:** *"What did I learn this session that is NOT yet written?"* — EXPECT to find gaps. List them, write them.
+2. **ADEQUACY:** *"Is anything I wrote a list of today's CASES rather than the PROPERTY that decides new ones?"* — a memory that enumerates the instances you happened to hit is a rule with an expiry date; it silently fails on the first case you did not foresee. Rewrite it as the property.
+
+Only move on when BOTH questions return nothing.
 
 ## Phase 2 — CORRECT / STALENESS
 
 `kijito_recall` each topic you touched this session. For every memory that is now **wrong or changed** → `kijito_correct` (fades old + links the fix; never edit history). **Obsolete** → `kijito_fade`. Operational/"how X works" memories are the most dangerous when stale — verify against reality (code/config/files) before trusting or correcting.
+
+⚠️ **Correcting a memory ROTS every `[[id]]` link pointing AT it, and nothing warns you.** `kijito_correct` links *forward* (corpse → truth), but nothing traverses *backward*, so a live memory citing the old id now points at a record the system itself believes is false. **The more disciplined you are, the more rot you generate — correcting well is what causes it.** So after each correction, find its inbound citers and re-point them at the live id (`kijito_update` with `structural=true`, which preserves the staleness clock because bracketed digits carry no meaning). ⚠️ Do not trust the `Status:` field to spot a dead target — `GET /api/memory/{id}` reports `Status: active` on believed-false records; **check `importance` (retired ≈ 0.1) and `confidence` (≈ 0.05) instead.**
 
 ## Phase 3 — PRELOAD THE HANDOFF (the current-state pointer)
 
@@ -51,10 +57,13 @@ Prove the memory works in a context that has never seen this conversation. Spawn
 > 4. the DONE-WHEN criteria,
 > 5. anything ambiguous, missing, or contradictory.
 > Do not guess or infer beyond what the memories say — if it isn't in memory, report it as a GAP.
+> Do NOT re-check defects already named as fixed — hunt for SIBLINGS in places nobody has looked yet.
 
 Compare its report to ground truth:
 - Reconstructs task + next step + DONE-WHEN correctly, no load-bearing gaps → **PASS**.
-- Misses, garbles, or flags a real gap → **FAIL**: that gap is a missing/weak memory → go back to **Phase 1/3**, fix the *specific* gap, re-run.
+- Misses, garbles, or flags a real gap → **FAIL**: that gap is a missing/weak memory. **Do NOT just fix the one it named.** First ask **"what CLASS of gap is this?"** — then sweep every sibling location that could hold the same class (other memories, the pointer, the other phases' output), and fix them **together** in one pass. Then go back to **Phase 1/3** and re-run.
+
+⚠️ **This is the difference between a loop that terminates and one that doesn't.** Fixing only the named instance makes each round surface one more member of the same class, so the loop runs **O(instances) instead of O(classes)** — and it looks like diligence the entire way, which is why nobody notices they are paying it. Measured: one class, closable by a single sweep on round one, instead consumed 5 rounds / 10 verifiers / ~2 hours.
 
 **2-green:** repeat Phase 4 until two consecutive cold boots reconstruct cleanly. Finding any issue resets the count.
 
