@@ -3,6 +3,7 @@ import readline from "node:readline";
 
 let threadId = process.env.MOCK_THREAD_ID || "mock-thread-1";
 let turn = 0;
+const clientMessageIds = new Set();
 
 function emit(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -33,6 +34,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (msg.method === "mcpServerStatus/list") {
     emit({ id: msg.id, result: { data: [{ name: "kijito", authStatus: "bearerToken", resources: [], resourceTemplates: [], tools: { kijito_hive_inbox: {} } }], nextCursor: null } });
   } else if (msg.method === "turn/start") {
+    if (clientMessageIds.has(msg.params.clientUserMessageId)) {
+      emit({ id: msg.id, error: { code: -32602, message: "duplicate clientUserMessageId" } });
+      return;
+    }
+    clientMessageIds.add(msg.params.clientUserMessageId);
     turn += 1;
     const turnId = `mock-turn-${turn}`;
     emit({ id: msg.id, result: { turn: { id: turnId, status: "inProgress", items: [] } } });

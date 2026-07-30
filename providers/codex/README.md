@@ -10,7 +10,8 @@ Codex app-server thread. It does not install hooks, plugins, LaunchAgents, model
 to the ordinary Codex home.
 
 Production is an explicit, isolated install: one private root and one launcher. Nothing starts at
-login, and the installer refuses to overwrite an existing target.
+login. A fresh install refuses to overwrite an existing target; upgrades use the separate,
+state-preserving `--upgrade` transaction below.
 
 ## Layout
 
@@ -71,6 +72,21 @@ codex-kijito-hive stop
 
 `start` is an explicit detached start, not a login item or `LaunchAgent`.
 `smoke` starts, waits for the dedicated thread to arm, and stops cleanly.
+`doctor` reports `ARMED`, `INACTIVE`, or `RED`; only `ARMED` means the wake path is live.
+
+Upgrade an existing install with the installer, never with uninstall/reinstall:
+
+```sh
+node install.mjs --upgrade
+```
+
+The upgrade stages and verifies new bytes, stops the sole old consumer, preserves its thread,
+mail high-water mark, event cursor, and log, swaps roots, and re-arms before returning. The
+consumer lock is stream-scoped rather than install-root-scoped, so a second root cannot double-arm
+the same persona. Mail written during the bounded swap remains after the inherited cursor and is
+consumed on the new run. A failed new start restores and re-arms the previous installation; a
+private rollback root is retained after success and reported in the command result.
+
 Uninstall is manifest-bound and confirm-required:
 
 ```sh

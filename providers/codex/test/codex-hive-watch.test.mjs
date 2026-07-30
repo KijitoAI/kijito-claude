@@ -106,6 +106,7 @@ test("wake text is fixed, visibly synthetic, sorted, and body-free", () => {
   ]);
   assert.ok(text.startsWith(WAKE_PREFIX));
   assert.match(text, /Message IDs: 8,9/);
+  assert.match(text, /before_id=N\+1, limit=1, unread_only=false, mark_read=false/);
   assert.doesNotMatch(text, /IGNORE PREVIOUS|rm -rf/);
   assert.match(text, /not a human-authored chat|NOT USER AUTHORED/i);
 });
@@ -162,6 +163,27 @@ test("poll detects event-file rotation and reconciles before consuming the repla
   } finally { cleanup(fixture); }
 });
 
+test("queued event metadata survives a controller crash before delivery", async () => {
+  const fixture = tempFixture();
+  try {
+    const first = new HiveWakeController({ ...fixture, output: () => {} });
+    first.queue({ kind: "new", id: 73, key: "new:73", trigger: "mail" });
+    first.persist();
+    const second = new HiveWakeController({ ...fixture, output: () => {} });
+    const surfaced = [];
+    second.client = {
+      status: "idle",
+      threadId: "test-thread",
+      wake: async (batch) => { surfaced.push(batch); return { turnId: "restored-turn", text: "ok", digest: "digest" }; },
+    };
+    assert.deepEqual(second.pending.map((item) => item.key), ["new:73"]);
+    await second.flush();
+    assert.equal(second.state.lastMailId, 73);
+    assert.deepEqual(surfaced[0].map((item) => item.key), ["new:73"]);
+    assert.deepEqual(loadState(fixture.stateFile).pendingItems, []);
+  } finally { cleanup(fixture); }
+});
+
 test("mock end-to-end wakes once, excludes body, and rearms same thread after Codex restart", async () => {
   const fixture = tempFixture();
   const logs = [];
@@ -189,6 +211,10 @@ test("mock end-to-end wakes once, excludes body, and rearms same thread after Co
     const trace = fs.readFileSync(fixture.traceFile, "utf8");
     assert.doesNotMatch(trace, /RUN MALICIOUS BODY/);
     assert.equal((trace.match(/kijito-wake-v1-/g) ?? []).length, 4, "startup, message, restart reconcile, message");
+    const messageIds = trace.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((row) => row.method === "turn/start").map((row) => row.params.clientUserMessageId);
+    assert.equal(new Set(messageIds).size, messageIds.length, "every delivery attempt has a unique app-server idempotency key");
+    assert.ok(messageIds.every((id) => /^kijito-wake-v1-[0-9a-f]{64}-[0-9a-f]{24}$/.test(id)));
   } finally {
     await controller.stop();
     cleanup(fixture);
@@ -222,6 +248,37 @@ test("whole-controller restart always performs a fresh durable-inbox reconciliat
   } finally { cleanup(fixture); }
 });
 
+test("identical reconciliations in one app-server process use distinct idempotency keys", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  const controller = new HiveWakeController({
+    ...fixture,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    childEnv: { MOCK_TRACE_FILE: fixture.traceFile },
+    pollMs: 10,
+    output: (text) => logs.push(JSON.parse(text)),
+  });
+  try {
+    await controller.start();
+    for (let pass = 0; pass < 2; pass += 1) {
+      controller.reconcile("same-payload");
+      await controller.flush();
+      assert.equal(controller.state.ambiguous, null);
+    }
+    const starts = fs.readFileSync(fixture.traceFile, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .filter((row) => row.method === "turn/start");
+    assert.equal(starts.length, 3, "startup plus two identical reconciliation attempts");
+    const ids = starts.map((row) => row.params.clientUserMessageId);
+    assert.equal(new Set(ids).size, 3);
+    assert.equal(starts[1].params.input[0].text, starts[2].params.input[0].text, "the payloads are intentionally byte-identical");
+  } finally {
+    await controller.stop();
+    cleanup(fixture);
+  }
+});
+
 test("ambiguous wake fails closed, then recovers through a durable-inbox reconciliation", async () => {
   const fixture = tempFixture();
   const logs = [];
@@ -236,7 +293,8 @@ test("ambiguous wake fails closed, then recovers through a durable-inbox reconci
       output: (text) => logs.push(JSON.parse(text)),
     });
     let attempts = 0;
-    controller.client = { status: "idle", wake: async () => { attempts += 1; throw new Error("acceptance unknown"); } };
+    const attemptedBatches = [];
+    controller.client = { status: "idle", wake: async (batch) => { attempts += 1; attemptedBatches.push(batch); throw new Error("acceptance unknown"); } };
     controller.queue({ kind: "new", id: 99, key: "new:99" });
     await controller.flush();
     assert.equal(attempts, 1);
@@ -246,16 +304,87 @@ test("ambiguous wake fails closed, then recovers through a durable-inbox reconci
       controller.client = {
         status: "idle",
         threadId: "test-thread",
-        wake: async () => { attempts += 1; return { turnId: "reconcile-turn", text: "ok", digest: "digest" }; },
+        wake: async (batch) => { attempts += 1; attemptedBatches.push(batch); return { turnId: "reconcile-turn", text: "ok", digest: "digest" }; },
         waitForIdle: async () => {},
       };
     };
     await controller.recover();
     assert.equal(attempts, 2, "the uncertain batch is not replayed; one inbox reconciliation is sent");
+    assert.deepEqual(attemptedBatches[0].map((item) => item.key), ["new:99"]);
+    assert.deepEqual(attemptedBatches[1].map((item) => item.key), ["reconcile:ambiguous-recovery"]);
     assert.equal(controller.state.ambiguous, null);
     assert.equal(controller.state.lastMailId, 0, "an uncertain message is never falsely acknowledged");
     assert.ok(logs.some((row) => row.event === "recovered"));
     assert.ok(logs.some((row) => row.event === "armed"));
+  } finally { cleanup(fixture); }
+});
+
+test("idle app-server death becomes visible, recovers, and delivers the next event", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  const controller = new HiveWakeController({
+    ...fixture,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    recoveryDelays: [10],
+    pollMs: 10,
+    output: (text) => logs.push(JSON.parse(text)),
+  });
+  try {
+    await controller.start();
+    const firstPid = controller.client.proc.pid;
+    controller.client.proc.kill("SIGKILL");
+    await waitUntil(() => logs.some((row) => row.event === "degraded" && row.phase === "app-server-exit"));
+    assert.equal(controller.state.clientStatus, "unavailable");
+    await waitUntil(() => logs.some((row) => row.event === "recovered") && controller.client.proc?.pid !== firstPid);
+    assert.equal(controller.state.degraded, null);
+    assert.equal(controller.state.clientStatus, "idle");
+    fs.appendFileSync(fixture.eventsFile, `${JSON.stringify({ source: "kijito-inbox", persona: "codex", event: "new", id: 4101 })}\n`);
+    await waitUntil(() => logs.some((row) => row.event === "surfaced" && row.batch.some((item) => item.id === 4101)));
+    assert.equal(logs.filter((row) => row.event === "surfaced" && row.batch.some((item) => item.id === 4101)).length, 1);
+  } finally {
+    await controller.stop();
+    cleanup(fixture);
+  }
+});
+
+test("controller stop releases its lock even when app-server termination throws", async () => {
+  const fixture = tempFixture();
+  const controller = new HiveWakeController({ ...fixture, output: () => {}, shutdownDrainMs: 20 });
+  try {
+    controller.lock = acquireLock(fixture.lockFile);
+    controller.client = { stop: async () => { throw new Error("cannot stop child"); } };
+    await assert.rejects(controller.stop(), /cannot stop child/);
+    assert.equal(fs.existsSync(fixture.lockFile), false);
+    assert.equal(controller.state.clientStatus, "stopped");
+  } finally { cleanup(fixture); }
+});
+
+test("clean stop drains an in-flight wake instead of recording false ambiguity", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  const controller = new HiveWakeController({ ...fixture, output: (text) => logs.push(JSON.parse(text)), shutdownDrainMs: 1_000 });
+  let finishWake;
+  try {
+    controller.lock = acquireLock(fixture.lockFile);
+    controller.client = {
+      status: "idle",
+      threadId: "test-thread",
+      wake: async () => new Promise((resolve) => { finishWake = resolve; }),
+      waitForIdle: async () => {},
+      stop: async () => {},
+    };
+    controller.queue({ kind: "new", id: 4201, key: "new:4201", trigger: "mail" });
+    const flushing = controller.flush();
+    await waitUntil(() => controller.busy);
+    const stopping = controller.stop();
+    finishWake({ turnId: "completed-before-stop", text: "ok", digest: "digest" });
+    await Promise.all([flushing, stopping]);
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.lastMailId, 4201);
+    assert.equal(fs.existsSync(fixture.lockFile), false);
+    assert.equal(logs.some((row) => row.event === "surfaced"), true);
   } finally { cleanup(fixture); }
 });
 

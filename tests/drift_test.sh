@@ -76,6 +76,31 @@ else
   echo "== codex skills: SKIP (no $CODEX_SKILLS on this machine) =="
 fi
 
+# The executable Codex wake runtime is at least as important as its prose skills. A previous version
+# of this gate compared only ~/.codex/skills, so an old flat controller could stay live while the
+# repository shipped repaired nested bytes and the gate still reported green.
+CODEX_RUNTIME="${KIJITO_CODEX_INSTALL_ROOT:-$HOME/.local/share/codex-kijito-hive}"
+if [ -d "$CODEX_RUNTIME" ]; then
+  echo "== codex wake runtime: $REPO/providers  vs  $CODEX_RUNTIME =="
+  while IFS='|' read -r label source installed; do
+    if [ ! -f "$installed" ]; then
+      printf "  DRIFT    %-26s installed runtime is missing this repo byte\n" "$label"
+      drift=$((drift+1)); continue
+    fi
+    if [ "$(shasum -a 256 "$source" | cut -d' ' -f1)" = "$(shasum -a 256 "$installed" | cut -d' ' -f1)" ]; then
+      printf "  ok       %s\n" "$label"; same=$((same+1))
+    else
+      printf "  DRIFT    %-26s %s\n" "$label" "$(newer "$source" "$installed")"; drift=$((drift+1))
+    fi
+  done <<EOF
+controller.mjs|$REPO/providers/codex/controller.mjs|$CODEX_RUNTIME/codex/controller.mjs
+wake-core.mjs|$REPO/providers/_shared/wake-core.mjs|$CODEX_RUNTIME/_shared/wake-core.mjs
+cli.mjs|$REPO/providers/codex/cli.mjs|$CODEX_RUNTIME/cli.mjs
+EOF
+else
+  echo "== codex wake runtime: SKIP (no $CODEX_RUNTIME on this machine) =="
+fi
+
 # Files present in the install but with no repo counterpart. NOT drift — an install dir legitimately
 # holds unrelated local tools — but worth naming, since an artifact with no upstream anywhere is
 # exactly how the 2026-07-29 gap arose. Reported, never failed on.

@@ -44,11 +44,11 @@ duplicate `PostCompact` without the ticket is also a no-op.
    - If it is stopped and the user's standing consent for hive supervision is
      still current, run `start` once. Never start a second consumer beside a
      live or uncertain one.
-   - Require `running`, doctor `wake.status` exactly `ARMED`, top-level doctor
-     `GREEN`, `hooksDisabled=true`, `launchAgentInstalled=false`,
-     `eventStreamReady=true`, and `workspaceEmpty=true`. Top-level doctor
-     `GREEN` means no known integrity/runtime fault; it does **not** by itself
-     prove the wake path is armed. Then verify runtime state names persona `codex`, has
+   - Require `running`, top-level doctor `ARMED`, doctor `wake.status` exactly
+     `ARMED`, `hooksDisabled=true`, `launchAgentInstalled=false`,
+     `eventStreamReady=true`, and `workspaceEmpty=true`. Doctor reports
+     `INACTIVE` for a cleanly stopped controller and `RED` for a fault; neither
+     is arm evidence. Then verify runtime state names persona `codex`, has
      a nonempty dedicated `threadId`, and has `ambiguous=null`; verify the owned
      app-server is alive and the current controller lifecycle has a successful
      `armed`/`rearmed-after-codex-restart` event or a later accepted `surfaced`
