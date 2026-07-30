@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kijito QA Memory"
+  short_description: "Curate and cold-boot verify Kijito memory"
+  default_prompt: "Use $kijito-qa-memory to curate this handoff and prove two clean cold boots."

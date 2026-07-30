@@ -13,7 +13,7 @@ export KIJITO_LC_DIR="$LCT" CLAUDE_CODE_SESSION_ID=testsess KIJITO_LC_TEST=1
 # Default is now the REPO copy, i.e. the thing that actually ships. Set KIJITO_TEST_TARGET=installed
 # to exercise ~/.claude instead (what your machine is really running); tests/drift_test.sh reports
 # when the two disagree.
-SDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
+SDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../providers/claude/scripts" && pwd)"
 if [ "${KIJITO_TEST_TARGET:-repo}" = "installed" ]; then SDIR="$HOME/.claude"; fi
 echo "== target: ${KIJITO_TEST_TARGET:-repo} ($SDIR) =="
 LIB="$SDIR/lifecycle-lib.sh"; SC="$SDIR/self-clear.sh"; QP="$SDIR/kijito-qa-pass.sh"; AS="$SDIR/session-autosend.sh"

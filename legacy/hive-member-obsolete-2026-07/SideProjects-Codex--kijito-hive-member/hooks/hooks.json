@@ -1,0 +1,68 @@
+{
+  "description": "Kijito hive awareness and memory-QA lifecycle hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/scripts/hook.mjs\" --expect SessionStart",
+            "timeout": 15,
+            "statusMessage": "Checking Kijito hive mail"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/scripts/hook.mjs\" --expect UserPromptSubmit",
+            "timeout": 15,
+            "statusMessage": "Checking Kijito hive mail"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-precompact-hook.sh\"",
+            "timeout": 15,
+            "statusMessage": "Verifying Kijito pre-compaction memory QA"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/scripts/hook.mjs\" --expect PostCompact",
+            "timeout": 15,
+            "statusMessage": "Restoring Kijito continuity after compaction"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/run-node.sh\" \"${PLUGIN_ROOT}/scripts/hook.mjs\" --expect Stop",
+            "timeout": 10,
+            "statusMessage": "Checking Kijito memory QA"
+          }
+        ]
+      }
+    ]
+  }
+}

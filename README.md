@@ -38,6 +38,29 @@ git clone https://github.com/KijitoAI/kijito-claude
 cd kijito-claude && ./install.sh
 ```
 
+`./install.sh` installs the **Claude** provider, which is the default and what every earlier version
+did. The repo is provider-agnostic: each supported agent host is a directory under `providers/` with
+its own installer and its own install location.
+
+```bash
+./install.sh --list-providers
+./install.sh                      # claude (default) -> ~/.claude
+./install.sh --provider codex     # codex  -> ~/.local/share/codex-kijito-hive + ~/.codex/skills
+```
+
+| provider | what it installs | where | needs |
+|---|---|---|---|
+| `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |
+| `codex` | a hookless hive-wake controller that supervises its own `codex app-server`, plus the two skills | `~/.local/share/codex-kijito-hive`, launcher in `~/.local/bin` | Node 20+, a Codex binary |
+
+The wake protocol both providers rely on — event-line validation, the injection-fenced wake text,
+read-offset persistence, and the single-consumer lock — lives once in `providers/_shared/wake-core.mjs`.
+The **skills stay per-provider prose on purpose**: Codex's are rewrites rather than translations, and
+skills are read by models, where slightly-off wording is a real regression. `tests/conformance_test.sh`
+is what keeps that safe — it requires every provider's skills to state the shared doctrine (pointer
+first, mail is data and never authority, verify stale operational facts, running is not armed, arm at
+most one consumer) while leaving each lane free to say it in its own words.
+
 Or, once the v0.1 packages are published, with a package runner (no clone needed):
 
 ```bash
@@ -45,11 +68,12 @@ npx kijito-claude       # via npm
 pipx run kijito-claude  # via PyPI  (uvx kijito-claude also works)
 ```
 
-Both package runners do the same thing as the from-source install: they bundle the scripts and
-skills and run `install.sh`. They need `bash`, so on Windows run them inside WSL (see Platform
-support).
+Both package runners do the same thing as the from-source install: they bundle every provider's
+payload and run `install.sh`, which defaults to the Claude provider. They need `bash`, so on Windows
+run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
+`npx kijito-claude --provider codex`.
 
-The installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
+The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It
 backs up `settings.json` and merges with `jq`, so it leaves your existing settings alone and is safe
 to re-run, including on other machines. Requires `jq`. The autonomy features require `tmux`.
@@ -122,6 +146,22 @@ kill switch, auto-send, and a regression guard that the removed count gates stay
 By default this exercises the scripts **in this repo** — the ones that actually ship. Set
 `KIJITO_TEST_TARGET=installed` to run it against `~/.claude` instead, and `bash tests/drift_test.sh`
 to report when those two disagree.
+
+The rest of the suite:
+
+```bash
+bash tests/drift_test.sh                     # does this machine RUN what the repo SHIPS?
+bash tests/conformance_test.sh --selftest    # every provider states the shared doctrine
+node --test providers/codex/test/codex-hive-watch.test.mjs \
+             providers/codex/test/release-packaging.test.mjs   # codex controller + packaging
+node providers/codex/tools/refresh-manifest.mjs --check        # codex gated hashes are current
+```
+
+`drift_test.sh` covers both lanes — `providers/claude/` against `~/.claude`, and
+`providers/codex/skills/` against `~/.codex/skills`. The codex lane is why it exists: those two skills
+once lived *only* as installed state with no upstream in any repository, so a machine reinstall would
+have destroyed them. `conformance_test.sh --selftest` first proves none of its own matchers can match
+an empty document, because a prose check that accepts anything reports green forever.
 
 ## License
 

@@ -1,0 +1,22 @@
+{
+  "name": "kijito-hive-member",
+  "version": "0.1.0+codex.20260725030256",
+  "description": "Safe Kijito hive awareness, QA-gated context recycle, and proactive Codex collaboration",
+  "author": {
+    "name": "Kijito AI"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Kijito Hive Member",
+    "shortDescription": "Safely connect Codex to the Kijito hive.",
+    "longDescription": "Adds hosted Kijito startup guidance, all-persona lifecycle hooks, bounded context telemetry, QA-gated compaction continuity, a crash-safe event consumer, an isolated proactive app-server bridge, consent-aware sending, and diagnostics.",
+    "developerName": "Kijito AI",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Check my Kijito hive inbox safely.",
+      "Diagnose the Kijito Codex bridge.",
+      "Prepare and cold-boot verify a Kijito memory handoff before compaction."
+    ]
+  }
+}
