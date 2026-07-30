@@ -618,7 +618,15 @@ export class HiveWakeController {
   }
 
   async recover() {
-    if (this.stopping || this.busy || this.recovering || this.restarting || (!this.state.ambiguous && !this.state.degraded)) return;
+    if (this.stopping || (!this.state.ambiguous && !this.state.degraded)) return;
+    // A timer relinquishes ownership immediately before calling recover(). If an explicit restart
+    // still owns the client transition, declining without another timer would strand the latch
+    // forever. Busy delivery and an active recovery already own a later schedule-or-rearm path;
+    // restart does not, so retain a future recovery owner here.
+    if (this.busy || this.recovering || this.restarting) {
+      if (this.restarting) this.scheduleRecovery();
+      return;
+    }
     this.recovering = true;
     this.recoveryAttempts += 1;
     const recoveringAmbiguity = Boolean(this.state.ambiguous);

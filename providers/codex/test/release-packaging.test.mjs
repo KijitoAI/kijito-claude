@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertArmedHealth, lockStatus, reapStaleLock, runtimeHealth, stop, waitArmed } from "../cli.mjs";
+import { parseArgs as parseInstallArgs, upgrade as upgradeDirect } from "../install.mjs";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repoRoot = path.resolve(packageRoot, "..", "..");
@@ -233,6 +234,12 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    const unknown = JSON.parse(run([f.launcher, "not-a-command"], 1).stdout);
+    assert.equal(unknown.status, "RED");
+    assert.equal(unknown.command, "not-a-command");
+    assert.equal(unknown.failure.category, "usage");
+    assert.match(unknown.failure.stack, /unknown command: not-a-command/);
+    assert.equal(unknown.wake.status, "UNKNOWN", "a usage error must not claim the wake path itself is red");
     const nextRealBin = path.join(f.root, "codex-real-next");
     fs.copyFileSync(f.realBin, nextRealBin);
     fs.chmodSync(nextRealBin, 0o700);
@@ -258,8 +265,11 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     fs.writeFileSync(manifest.paths.lockFile, "{broken\n", { mode: 0o600 });
     const corruptLock = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
     assert.equal(corruptLock.status, "RED");
+    assert.equal(corruptLock.command, "doctor");
     assert.equal(corruptLock.wake.status, "RED");
-    assert.match(corruptLock.reasons.join(" "), /integrity check failed/);
+    assert.equal(corruptLock.failure.category, "integrity");
+    assert.match(corruptLock.failure.stack, /SyntaxError/);
+    assert.match(corruptLock.reasons.join(" "), /integrity failure/);
     for (const args of [
       ["status"], ["start"], ["stop"], ["wait-armed"], ["smoke"], ["run"],
       ["uninstall", "--confirm-dedicated-home"],
@@ -268,7 +278,9 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
       assert.equal(verdict.status, "RED", `${args[0]} returns a structured fail-closed verdict`);
       assert.equal(verdict.wake.status, "RED");
       assert.equal(verdict.command, args[0]);
-      assert.match(verdict.reasons.join(" "), /integrity check failed/);
+      assert.equal(verdict.failure.category, "integrity");
+      assert.match(verdict.failure.stack, /SyntaxError/);
+      assert.match(verdict.reasons.join(" "), /integrity failure/);
     }
     fs.unlinkSync(manifest.paths.lockFile);
     const manifestFile = path.join(f.installRoot, "installed-manifest.json");
@@ -276,8 +288,11 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     fs.writeFileSync(manifestFile, "{broken\n", { mode: 0o600 });
     const corruptManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
     assert.equal(corruptManifest.status, "RED");
+    assert.equal(corruptManifest.command, "doctor");
     assert.equal(corruptManifest.wake.status, "RED");
-    assert.match(corruptManifest.reasons.join(" "), /integrity check failed/);
+    assert.equal(corruptManifest.failure.category, "integrity");
+    assert.match(corruptManifest.failure.stack, /SyntaxError/);
+    assert.match(corruptManifest.reasons.join(" "), /integrity failure/);
     fs.writeFileSync(manifestFile, validManifestText, { mode: 0o600 });
     fs.renameSync(f.events, `${f.events}.held`);
     const missingEvents = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
@@ -374,7 +389,7 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
   } finally { cleanupFixture(f); }
 });
 
-test("successful upgrades retain only the two newest private rollback roots", () => {
+test("successful upgrades retain only the two newest private rollback roots and launchers", () => {
   const f = fixture();
   try {
     run(installArgs(f));
@@ -386,11 +401,31 @@ test("successful upgrades retain only the two newest private rollback roots", ()
     }
     const roots = fs.readdirSync(path.dirname(f.installRoot))
       .filter((name) => name.startsWith(`${path.basename(f.installRoot)}.rollback.`));
+    const launchers = fs.readdirSync(path.dirname(f.launcher))
+      .filter((name) => name.startsWith(`${path.basename(f.launcher)}.rollback.`));
     assert.equal(roots.length, 2);
+    assert.equal(launchers.length, 2);
     assert.equal(fs.existsSync(reported[0]), false);
     assert.equal(fs.existsSync(reported[1]), false);
     assert.equal(fs.existsSync(reported[2]), true);
     assert.equal(fs.existsSync(reported[3]), true);
+  } finally { cleanupFixture(f); }
+});
+
+test("retention failure is reported after a verified upgrade without rolling it back", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const before = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const options = parseInstallArgs(upgradeArgs(f).slice(1));
+    const retentionError = Object.assign(new Error("intentional retention EPERM"), { code: "EPERM" });
+    const upgraded = upgradeDirect(options, { prune: () => { throw retentionError; } });
+    assert.equal(upgraded.status, "UPGRADED_INACTIVE");
+    assert.deepEqual(upgraded.retentionWarnings.map(({ code }) => code), ["EPERM"]);
+    assert.equal(fs.existsSync(`${options.lockFile}.upgrade`), false, "retention failure still releases upgrade ownership");
+    const after = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    assert.notEqual(after.installId, before.installId, "the verified replacement remains installed");
+    assert.equal(fs.existsSync(upgraded.rollbackRoot), true, "the previous installation remains recoverable");
   } finally { cleanupFixture(f); }
 });
 
@@ -753,7 +788,9 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
     const missingCore = JSON.parse(run([f.launcher, "status"], 1).stdout);
     assert.equal(missingCore.status, "RED");
     assert.equal(missingCore.command, "status");
-    assert.match(missingCore.reasons.join(" "), /integrity check failed/);
+    assert.equal(missingCore.failure.category, "integrity");
+    assert.match(missingCore.failure.stack, /ERR_MODULE_NOT_FOUND|Cannot find module/);
+    assert.match(missingCore.reasons.join(" "), /integrity failure/);
     fs.writeFileSync(wakeCore, wakeCoreBytes, { mode: 0o600 });
     run([f.launcher, "doctor"]);
     const launcherBytes = fs.readFileSync(f.launcher);
@@ -914,6 +951,45 @@ test("wait-armed rejects a historical armed row from a different live controller
       probes,
     );
     assert.equal(armed.threadId, "current-thread");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("wait-armed rejects rather than adopting a foreign live controller run", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-foreign-run."));
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  const token = "foreign-token";
+  const now = new Date().toISOString();
+  fs.writeFileSync(path.join(runtime, "consumer.lock"), `${JSON.stringify({ pid: 4242, token, persona: "codex" })}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(runtime, "state.json"), `${JSON.stringify({
+    schema: 1,
+    persona: "codex",
+    controllerPid: 4242,
+    controllerRunId: "foreign-run",
+    armAttemptId: "foreign-attempt",
+    armedRunId: "foreign-run",
+    armedAttemptId: "foreign-attempt",
+    armedAt: now,
+    heartbeatAt: now,
+    clientStatus: "idle",
+    lockTokenHash: createHash("sha256").update(token).digest("hex"),
+  })}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(runtime, "controller.ndjson"), `${JSON.stringify({
+    ts: now,
+    event: "armed",
+    threadId: "foreign-thread",
+    runId: "foreign-run",
+    armAttemptId: "foreign-attempt",
+  })}\n`, { mode: 0o600 });
+  const probes = {
+    kill: () => {},
+    command: () => ({ command: `${process.execPath} ${path.join(packageRoot, "codex", "controller.mjs")}`, error: null }),
+  };
+  try {
+    await assert.rejects(
+      waitArmed({ paths: { runtime } }, 100, 0, { runId: "expected-run", armAttemptId: "expected-attempt" }, probes),
+      /controller run changed while waiting for armed state/,
+    );
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

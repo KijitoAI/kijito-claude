@@ -257,10 +257,24 @@ function inspectDoctor(manifest) {
   };
 }
 
-function doctorFailure(manifest, error) {
-  const reason = `integrity check failed: ${error.message}`;
+function failureCategory(error) {
+  const message = String(error?.message ?? error);
+  if (/unknown command|requires --confirm|invalid argument/.test(message)) return "usage";
+  if (/controller|ownership|lock|arming|armed state|shutdown|app-server/.test(message)) return "ownership";
+  if (error instanceof SyntaxError
+    || /manifest|hash mismatch|private|user-owned|directory|file|token|workspace|event stream|ordinary Codex|executable/.test(message)
+    || ["EACCES", "EPERM", "ENOENT", "ENOTDIR", "ERR_MODULE_NOT_FOUND"].includes(error?.code)) return "integrity";
+  return "operation";
+}
+
+function doctorFailure(manifest, error, command = "doctor") {
+  const category = failureCategory(error);
+  const reason = `${category} failure: ${error.message}`;
+  const stack = typeof error?.stack === "string" ? error.stack : null;
   return {
     status: "RED",
+    command,
+    failure: { category, message: error.message, code: error.code ?? null, stack },
     product: manifest?.product ?? "codex-kijito-hive",
     version: manifest?.version ?? null,
     controllerSha256: manifest?.hashes?.controllerSha256 ?? null,
@@ -272,13 +286,15 @@ function doctorFailure(manifest, error) {
     ordinaryStateMatchesInstallSnapshot: null,
     controller: { state: "unknown" },
     reasons: [reason],
-    wake: { status: "RED", reasons: [reason] },
+    wake: category === "usage"
+      ? { status: "UNKNOWN", reasons: ["command was not executed"] }
+      : { status: "RED", reasons: [reason] },
   };
 }
 
 export function doctor(manifest) {
   try { return inspectDoctor(manifest); }
-  catch (error) { return doctorFailure(manifest, error); }
+  catch (error) { return doctorFailure(manifest, error, "doctor"); }
 }
 
 function controllerArgs(manifest) {
@@ -436,7 +452,7 @@ async function main() {
   try { manifest = loadManifest(); }
   catch (error) {
     if (command !== "doctor") throw error;
-    const result = doctorFailure(null, error);
+    const result = doctorFailure(null, error, command);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
     return;
@@ -476,8 +492,7 @@ async function main() {
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
     const command = process.argv[2] ?? "status";
-    const result = doctorFailure(null, error);
-    result.command = command;
+    const result = doctorFailure(null, error, command);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
   });

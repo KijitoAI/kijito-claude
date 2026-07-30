@@ -19,7 +19,7 @@ import {
   saveState,
   validateRuntimePaths,
 } from "../controller.mjs";
-import { assertNoLegacyConsumer } from "./prepare-live-gate.mjs";
+import { assertNoLegacyConsumer, cleanupLiveGate, prepareLiveGate, pruneExpiredLiveGates } from "./prepare-live-gate.mjs";
 
 const mockAppServer = fileURLToPath(new URL("./mock-app-server.mjs", import.meta.url));
 
@@ -56,6 +56,50 @@ function tempFixture() {
 function cleanup(fixture) {
   fs.rmSync(fixture.root, { recursive: true, force: true });
 }
+
+test("live-gate cleanup is prefix-scoped and stale private gates are pruned", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-live-retention-test."));
+  fs.chmodSync(tempRoot, 0o700);
+  const stale = fs.mkdtempSync(path.join(tempRoot, "codex-kijito-c3-live."));
+  const fresh = fs.mkdtempSync(path.join(tempRoot, "codex-kijito-c3-live."));
+  const active = fs.mkdtempSync(path.join(tempRoot, "codex-kijito-c3-live."));
+  const unrelated = fs.mkdtempSync(path.join(tempRoot, "unrelated."));
+  for (const root of [stale, fresh, active, unrelated]) fs.chmodSync(root, 0o700);
+  fs.writeFileSync(path.join(stale, "auth.json"), "secret\n", { mode: 0o600 });
+  fs.mkdirSync(path.join(active, "runtime"), { mode: 0o700 });
+  fs.writeFileSync(path.join(active, "runtime", "state.json"), `${JSON.stringify({ controllerPid: process.pid })}\n`, { mode: 0o600 });
+  const now = Date.now();
+  fs.utimesSync(stale, new Date(now - 10_000), new Date(now - 10_000));
+  fs.utimesSync(active, new Date(now - 10_000), new Date(now - 10_000));
+  try {
+    const retention = pruneExpiredLiveGates({ tempRoot, now, maxAgeMs: 5_000 });
+    assert.deepEqual(retention.removed, [stale]);
+    assert.equal(fs.existsSync(stale), false);
+    assert.equal(fs.existsSync(fresh), true);
+    assert.equal(fs.existsSync(active), true, "retention must not delete a gate whose controller pid is still live");
+    assert.throws(() => cleanupLiveGate(unrelated, tempRoot), /refusing unsafe live-gate cleanup target/);
+    assert.deepEqual(cleanupLiveGate(fresh, tempRoot), { status: "REMOVED", root: fresh });
+  } finally { fs.rmSync(tempRoot, { recursive: true, force: true }); }
+});
+
+test("live-gate preparation returns cleanup ownership and removes partial auth fixtures on failure", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-live-prepare-test."));
+  const home = path.join(root, "home");
+  const tempRoot = path.join(root, "tmp");
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(home, ".cache", "kijito-inbox-monitor"), { recursive: true, mode: 0o755 });
+  fs.mkdirSync(tempRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(home, ".codex", "auth.json"), '{"auth":"fixture"}\n', { mode: 0o600 });
+  try {
+    const gate = prepareLiveGate(home, tempRoot);
+    assert.equal(fs.readFileSync(path.join(gate.codexHome, "auth.json"), "utf8"), '{"auth":"fixture"}\n');
+    assert.deepEqual(gate.cleanup.args.slice(-2), ["--cleanup", gate.root]);
+    cleanupLiveGate(gate.root, tempRoot);
+    fs.unlinkSync(path.join(home, ".codex", "auth.json"));
+    assert.throws(() => prepareLiveGate(home, tempRoot), /ENOENT/);
+    assert.deepEqual(fs.readdirSync(tempRoot), [], "a failed auth copy must not orphan its temporary root");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 async function waitUntil(predicate, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -505,9 +549,9 @@ test("stop drains an in-progress app-server replacement before stopping the new 
   } finally { cleanup(fixture); }
 });
 
-test("restart excludes poll delivery and recovery until exactly one replacement child is ready", async () => {
+test("restart excludes concurrent recovery, then a retained degraded latch self-recovers", async () => {
   const fixture = tempFixture();
-  const controller = new HiveWakeController({ ...fixture, output: () => {} });
+  const controller = new HiveWakeController({ ...fixture, recoveryDelays: [10], output: () => {} });
   let releaseOldStop;
   let oldStopPromise;
   let oldWakeCalls = 0;
@@ -539,25 +583,71 @@ test("restart excludes poll delivery and recovery until exactly one replacement 
     controller.queue({ kind: "new", id: 4301, key: "new:4301", trigger: "mail" });
     const restarting = controller.restartCodex();
     await waitUntil(() => typeof releaseOldStop === "function");
-    controller.state.degraded = { at: new Date().toISOString(), reason: "probe", phase: "probe" };
-    const recovering = controller.recover();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const recoveryWasExcluded = controller.recovering === false;
-    controller.state.degraded = null;
     await controller.flush();
     controller.poll();
     await new Promise((resolve) => setTimeout(resolve, 20));
     const oldDeliveryWasExcluded = oldWakeCalls === 0;
     const concurrentReplacementWasExcluded = replacementCount === 0;
+    controller.state.degraded = { at: new Date().toISOString(), reason: "probe", phase: "probe" };
+    const recovering = controller.recover();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const recoveryWasExcluded = controller.recovering === false;
     releaseOldStop();
     await Promise.all([restarting, recovering]);
+    await waitUntil(() => controller.state.degraded === null && controller.state.armedAt !== null);
     assert.equal(recoveryWasExcluded, true, "recovery must remain excluded for the whole explicit restart");
     assert.equal(oldDeliveryWasExcluded, true, "poll must not deliver through the child being replaced");
     assert.equal(concurrentReplacementWasExcluded, true, "recovery must not create a concurrent replacement during restart");
     assert.equal(oldWakeCalls, 0, "poll must not deliver through the child being replaced");
-    assert.equal(replacementCount, 1, "one restart creates exactly one replacement child");
+    assert.equal(replacementCount, 2, "the explicit restart and later recovery each create one sequential replacement");
     assert.equal(replacementWakeCalls, 1, "queued mail and restart reconciliation flush on the replacement");
     assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.degraded, null);
+  } finally {
+    releaseOldStop?.();
+    await controller.stop().catch(() => {});
+    cleanup(fixture);
+  }
+});
+
+test("a scheduled ambiguous recovery that fires during restart remains scheduled and rearms", async () => {
+  const fixture = tempFixture();
+  const controller = new HiveWakeController({ ...fixture, recoveryDelays: [10], output: () => {} });
+  let releaseOldStop;
+  let replacements = 0;
+  try {
+    controller.state.threadId = "test-thread";
+    controller.client = {
+      status: "idle",
+      threadId: "test-thread",
+      stop: async () => new Promise((resolve) => { releaseOldStop = resolve; }),
+    };
+    controller.makeClient = () => {
+      replacements += 1;
+      return {
+        status: "starting",
+        threadId: "test-thread",
+        start: async function start() { this.status = "idle"; return "test-thread"; },
+        wake: async () => ({ turnId: "reconcile-turn", text: "ok", digest: "digest" }),
+        waitForIdle: async () => {},
+        stop: async () => {},
+      };
+    };
+    controller.state.ambiguous = {
+      at: new Date().toISOString(),
+      reason: "acceptance unknown",
+      batch: [{ kind: "new", id: 4401, key: "new:4401", trigger: "mail" }],
+    };
+    controller.scheduleRecovery();
+    const restarting = controller.restartCodex();
+    await waitUntil(() => typeof releaseOldStop === "function");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.notEqual(controller.recoveryTimer, null, "a declined timer must leave another recovery owner");
+    assert.equal(replacements, 0, "recovery must not replace the child concurrently with restart");
+    releaseOldStop();
+    await restarting;
+    await waitUntil(() => controller.state.ambiguous === null && controller.state.armedAt !== null);
+    assert.equal(replacements, 2, "restart and recovery replace the child sequentially");
     assert.equal(controller.state.degraded, null);
   } finally {
     releaseOldStop?.();

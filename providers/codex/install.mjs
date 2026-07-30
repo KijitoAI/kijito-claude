@@ -18,7 +18,7 @@ function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const values = {};
   // Boolean flags first: the loop below consumes strict `--key value` pairs and would reject a bare
   // flag as an invalid argument.
@@ -463,30 +463,58 @@ function requireUpgradePathContinuity(options, oldManifest) {
   }
 }
 
-function pruneHistoricalRoots(installRoot, keepPerKind = 2) {
-  const parent = path.dirname(installRoot);
-  const base = path.basename(installRoot);
-  const removed = [];
-  for (const kind of ["rollback", "failed"]) {
-    const prefix = `${base}.${kind}.`;
-    const candidates = fs.readdirSync(parent, { withFileTypes: true })
-      .filter((entry) => entry.name.startsWith(prefix) && entry.isDirectory() && !entry.isSymbolicLink())
-      .map((entry) => {
-        const file = path.join(parent, entry.name);
-        const stat = fs.lstatSync(file);
-        return { file, stat };
-      })
-      .filter(({ stat }) => stat.uid === process.getuid() && (stat.mode & 0o077) === 0)
-      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || b.file.localeCompare(a.file));
+function historicalCandidates(parent, prefix, kind) {
+  return fs.readdirSync(parent, { withFileTypes: true })
+    .filter((entry) => entry.name.startsWith(prefix) && !entry.isSymbolicLink()
+      && (kind === "directory" ? entry.isDirectory() : entry.isFile()))
+    .map((entry) => {
+      const file = path.join(parent, entry.name);
+      return { file, stat: fs.lstatSync(file) };
+    })
+    .filter(({ stat }) => stat.uid === process.getuid() && (stat.mode & 0o077) === 0)
+    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || b.file.localeCompare(a.file));
+}
+
+export function pruneHistoricalArtifacts(installRoot, launcher, keepPerKind = 2) {
+  const removed = { roots: [], launchers: [], warnings: [] };
+  const rootParent = path.dirname(installRoot);
+  const rootBase = path.basename(installRoot);
+  const groups = [
+    ...["rollback", "failed"].map((kind) => ({
+      bucket: "roots",
+      parent: rootParent,
+      prefix: `${rootBase}.${kind}.`,
+      kind: "directory",
+      recursive: true,
+    })),
+    {
+      bucket: "launchers",
+      parent: path.dirname(launcher),
+      prefix: `${path.basename(launcher)}.rollback.`,
+      kind: "file",
+      recursive: false,
+    },
+  ];
+  for (const { bucket, parent, prefix, kind, recursive } of groups) {
+    let candidates;
+    try { candidates = historicalCandidates(parent, prefix, kind); }
+    catch (error) {
+      removed.warnings.push({ file: parent, code: error.code ?? null, message: error.message });
+      continue;
+    }
     for (const { file } of candidates.slice(keepPerKind)) {
-      fs.rmSync(file, { recursive: true, force: false });
-      removed.push(file);
+      try {
+        fs.rmSync(file, { recursive, force: false });
+        removed[bucket].push(file);
+      } catch (error) {
+        removed.warnings.push({ file, code: error.code ?? null, message: error.message });
+      }
     }
   }
   return removed;
 }
 
-function upgrade(options) {
+export function upgrade(options, { prune = pruneHistoricalArtifacts } = {}) {
   requireAbsoluteDistinct(options);
   ensureLockDirectory(options.eventsFile, options.lockFile);
   options.installRoot = path.join(fs.realpathSync(path.dirname(options.installRoot)), path.basename(options.installRoot));
@@ -514,6 +542,7 @@ function upgrade(options) {
   let backupLauncherReady = false;
   let newRootReady = false;
   let newStartAttempted = false;
+  let completed = null;
   try {
     const status = runLauncher(options.launcher, ["status"], options.nodeBin, 30_000);
     if (!status.json?.status?.state) throw new Error(`cannot determine existing controller status: ${status.stderr || status.stdout}`);
@@ -572,8 +601,7 @@ function upgrade(options) {
     const expected = wasRunning ? "ARMED" : "INACTIVE";
     if (health.status !== 0 || health.json?.status !== expected) throw new Error(`upgraded doctor is not ${expected}: ${health.stderr || health.stdout}`);
     const skills = installSkills(options);
-    const prunedHistoricalRoots = pruneHistoricalRoots(options.installRoot);
-    return {
+    completed = {
       status: wasRunning ? "UPGRADED_ARMED" : "UPGRADED_INACTIVE",
       installRoot: options.installRoot,
       launcher: options.launcher,
@@ -583,7 +611,6 @@ function upgrade(options) {
       armed,
       doctor: health.json,
       skills,
-      prunedHistoricalRoots,
       recoverable: true,
     };
   } catch (error) {
@@ -626,20 +653,38 @@ function upgrade(options) {
   } finally {
     try { fs.rmSync(stagedRoot, { recursive: true, force: true }); } catch {}
     try { fs.unlinkSync(stagedLauncher); } catch {}
-    releaseUpgradeLock(heldUpgradeLock);
+    if (!completed) releaseUpgradeLock(heldUpgradeLock);
   }
+  // Retention is intentionally outside the swap/verification transaction: an EPERM while deleting
+  // an old artifact must never roll back a newly verified and (when applicable) armed controller.
+  let retention;
+  try {
+    try { retention = prune(options.installRoot, options.launcher); }
+    catch (error) {
+      retention = { roots: [], launchers: [], warnings: [{ file: null, code: error.code ?? null, message: error.message }] };
+    }
+  } finally { releaseUpgradeLock(heldUpgradeLock); }
+  return {
+    ...completed,
+    prunedHistoricalRoots: retention.roots,
+    prunedHistoricalLaunchers: retention.launchers,
+    retentionWarnings: retention.warnings,
+  };
 }
 
-try {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.skillsOnly && options.upgrade) throw new Error("--skills-only and --upgrade are mutually exclusive");
-  // --skills-only updates the skills on a machine whose install root already exists, which a full
-  // install deliberately refuses to touch.
-  const result = options.skillsOnly
-    ? { status: "SKILLS_INSTALLED", skillsRoot: options.skillsRoot, skills: installSkills(options) }
-    : options.upgrade ? upgrade(options) : install(options);
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-} catch (error) {
-  process.stderr.write(`${error.stack ?? error.message}\n`);
-  process.exitCode = 1;
+if (process.argv[1]
+  && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    if (options.skillsOnly && options.upgrade) throw new Error("--skills-only and --upgrade are mutually exclusive");
+    // --skills-only updates the skills on a machine whose install root already exists, which a full
+    // install deliberately refuses to touch.
+    const result = options.skillsOnly
+      ? { status: "SKILLS_INSTALLED", skillsRoot: options.skillsRoot, skills: installSkills(options) }
+      : options.upgrade ? upgrade(options) : install(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exitCode = 1;
+  }
 }

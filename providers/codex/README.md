@@ -55,17 +55,20 @@ The live gate creates a private temporary `CODEX_HOME` containing:
 The bearer token is passed through `KIJITO_API_TOKEN`; it is never placed on a
 command line or in controller state.
 
+The helper prints an explicit cleanup command for its private temporary root and prunes safe roots
+older than six hours on its next run. Run the printed command as soon as the live gate finishes;
+the copied `auth.json` is sensitive recovery material, not an ordinary disposable test fixture.
+
 ## Install and operate
 
 The release manifest owns the dedicated `~/.local/share/codex-kijito-hive` tree and
 `~/.local/bin/codex-kijito-hive` launcher, and records the external deterministic lock path under
-the monitor event directory. Run the installer with a healthy Node 20+ runtime, then use the
-explicit launcher:
+the monitor event directory. The Kijito inbox monitor must be installed and running first: its
+private `~/.cache/kijito-inbox-monitor/events.codex.ndjson` event file must already exist before
+either a fresh install or `--upgrade`. The installer deliberately validates that real
+producer-owned file; it does not create a look-alike stream on the consumer's behalf.
 
-The Kijito inbox monitor must be installed and running first: its private
-`~/.cache/kijito-inbox-monitor/events.codex.ndjson` event file must already exist before either a
-fresh install or `--upgrade`. The installer deliberately validates that real producer-owned file;
-it does not create a look-alike stream on the consumer's behalf.
+Run the installer with a healthy Node 20+ runtime, then use the explicit launcher:
 
 ```sh
 node install.mjs                 # or, from the repo root: ./install.sh --provider codex
@@ -99,10 +102,12 @@ or Node runtime. If a non-default path was used for the original installation, p
 flags again. The configured Codex executable is the deliberate exception: upgrading from a legacy
 version-pinned release path to the stable Codex symlink is supported and reported by `doctor`.
 
-At most the two newest private `.rollback.*` roots and the two newest `.failed.*` roots are retained
-after a successful upgrade; older safe, user-owned `0700` historical roots are pruned. These roots
-contain a private copy of the dedicated Codex home, including `auth.json`, so they are recovery
-artifacts rather than ordinary build output. A failed upgrade never prunes its own recovery bytes.
+At most the two newest private `.rollback.*` roots, `.failed.*` roots, and launcher `.rollback.*`
+copies are retained after a successful upgrade; older safe, user-owned private historical artifacts
+are pruned. The roots contain a private copy of the dedicated Codex home, including `auth.json`, so
+they are recovery artifacts rather than ordinary build output. Retention failures are reported as
+warnings after the verified swap and never trigger rollback. A failed upgrade never prunes its own
+recovery bytes.
 
 The shared monitor directory may be `0755`, matching the monitor's production layout. It must be a
 real directory owned by the current uid and may not be writable by group or other users
@@ -120,6 +125,14 @@ cannot exclude a new-version controller mechanically. Never run `test/prepare-li
 direct new controller, or a second new-code installation against the real stream while the legacy
 `runtime/consumer.lock` exists. The live-gate helper refuses that condition. The supported cutover
 is the single `--upgrade` transaction, which stops the legacy owner before arming canonical bytes.
+For the current legacy production install, pass its manifest-pinned ChatGPT runtime explicitly:
+
+```sh
+node install.mjs --upgrade --node-bin /Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node
+```
+
+Omitting that flag selects the invoking `node`; path-continuity validation correctly refuses the
+cutover before stopping the legacy owner.
 
 The installed manifest preserves the configured Codex executable path instead of resolving it to a
 versioned release directory. This intentionally follows a stable vendor symlink across a normal
