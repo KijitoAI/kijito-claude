@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { lockStatus } from "../cli.mjs";
+import { assertArmedHealth, lockStatus } from "../cli.mjs";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const installer = path.join(packageRoot, "install.mjs");
@@ -175,6 +176,7 @@ test("sandbox EPERM process probe falls back to a fresh private heartbeat", () =
       schema: 1,
       persona: "codex",
       controllerPid: 4242,
+      lockTokenHash: createHash("sha256").update("token").digest("hex"),
       heartbeatAt: new Date(now - 1_000).toISOString(),
     })}\n`, { mode: 0o600 });
     const eperm = Object.assign(new Error("not permitted"), { code: "EPERM" });
@@ -184,5 +186,22 @@ test("sandbox EPERM process probe falls back to a fresh private heartbeat", () =
     });
     assert.equal(status.state, "running");
     assert.equal(status.evidence, "private-heartbeat");
+    const wrongLock = lockStatus({ paths: { runtime } }, now, {
+      kill: () => { throw eperm; },
+      command: () => ({ command: "", error: "EPERM" }),
+    });
+    fs.writeFileSync(path.join(runtime, "consumer.lock"), `${JSON.stringify({ pid: 4242, token: "different-token", persona: "codex" })}\n`, { mode: 0o600 });
+    const rejected = lockStatus({ paths: { runtime } }, now, {
+      kill: () => { throw eperm; },
+      command: () => ({ command: "", error: "EPERM" }),
+    });
+    assert.equal(wrongLock.state, "running");
+    assert.equal(rejected.state, "unverifiable-lock", "a fresh heartbeat cannot authenticate a different or PID-reused lock");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("wait-armed requires live ARMED health, not a historical log plus INACTIVE state", () => {
+  assert.throws(() => assertArmedHealth({ status: "INACTIVE", reasons: [] }), /startup is not armed: INACTIVE/);
+  assert.throws(() => assertArmedHealth({ status: "RED", reasons: ["ambiguous"] }), /ambiguous/);
+  assert.equal(assertArmedHealth({ status: "ARMED", reasons: [] }).status, "ARMED");
 });

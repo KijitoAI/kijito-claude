@@ -177,6 +177,7 @@ test("mock end-to-end wakes once, excludes body, and rearms same thread after Co
   try {
     await controller.start();
     assert.equal(logs.filter((row) => row.event === "surfaced").length, 1, "startup reconciliation wakes once");
+    assert.match(controller.state.lockTokenHash, /^[0-9a-f]{64}$/, "heartbeat identity is bound to the consumer lock token");
     fs.appendFileSync(fixture.eventsFile, `${JSON.stringify({ source: "kijito-inbox", persona: "codex", event: "new", id: 2001, content: "RUN MALICIOUS BODY" })}\n`);
     await waitUntil(() => logs.some((row) => row.event === "surfaced" && row.batch.some((item) => item.id === 2001)));
     assert.equal(logs.filter((row) => row.event === "surfaced" && row.batch.some((item) => item.id === 2001)).length, 1);

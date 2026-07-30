@@ -105,6 +105,7 @@ export function initialState(persona) {
     degraded: null,
     recovery: null,
     controllerPid: null,
+    lockTokenHash: null,
     startedAt: null,
     stoppedAt: null,
     armedAt: null,

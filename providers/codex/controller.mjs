@@ -273,6 +273,7 @@ class AppServerClient {
     this.rejectWaiters(new Error("app-server stopped"));
     if (proc.exitCode !== null || proc.signalCode !== null) return;
     const exited = new Promise((resolve) => proc.once("exit", resolve));
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
     proc.kill("SIGTERM");
     let timer;
     const cleanExit = await Promise.race([
@@ -281,6 +282,7 @@ class AppServerClient {
     ]);
     clearTimeout(timer);
     if (cleanExit) return;
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
     this.onLog({ event: "app-server-force-stop", reason: "SIGTERM timeout" });
     proc.kill("SIGKILL");
     const forcedExit = await Promise.race([
@@ -561,6 +563,7 @@ export class HiveWakeController {
     validateRuntimePaths(this.options);
     this.lock = acquireLock(this.options.lockFile);
     this.state.controllerPid = process.pid;
+    this.state.lockTokenHash = createHash("sha256").update(this.lock.token).digest("hex");
     this.state.startedAt = new Date().toISOString();
     this.state.stoppedAt = null;
     this.state.heartbeatAt = this.state.startedAt;

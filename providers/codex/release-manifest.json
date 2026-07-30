@@ -13,9 +13,9 @@
     }
   },
   "artifacts": {
-    "controllerSha256": "348e52b77aa056b8eeb94f6df217ca6156201d9f16532a8ef4a992f04519dfde",
-    "wakeCoreSha256": "65e31634f6f7f1407f3513d38e289f3ccc3ff0eb6b33b5d47bb3710639d9ec04",
-    "controllerTestsSha256": "dc6b7b3d5833ce613d6a11c860bbdad15d3198965e91f3001328da0b5a081054",
+    "controllerSha256": "44feb98ea7c671745ce395075a9a3596a8f8842163f1b08a10721112b8a08f1b",
+    "wakeCoreSha256": "a135b71ee39078008f90ae165e85c8d37e706c65edf1df21da7381fce59c7296",
+    "controllerTestsSha256": "69e25fae7f8a2ab98c91d1f793ddf28dc1a2ef629f27994fceb01cd749bdb311",
     "planSha256": "b1fc0953d94b1e9712097dd382b32360d57f09815cc47a3be591c8000c819537"
   },
   "ownedPaths": [

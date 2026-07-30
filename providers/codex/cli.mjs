@@ -69,6 +69,11 @@ function freshHeartbeat(state, pid, now = Date.now()) {
   return state?.controllerPid === pid && Number.isFinite(at) && age >= -5_000 && age <= HEARTBEAT_STALE_MS;
 }
 
+function heartbeatOwnsLock(state, lock) {
+  if (typeof state?.lockTokenHash !== "string" || typeof lock.token !== "string") return false;
+  return state.lockTokenHash === createHash("sha256").update(lock.token).digest("hex");
+}
+
 export function lockStatus(manifest, now = Date.now(), probes = { kill: process.kill.bind(process), command: processCommand }) {
   const lockFile = path.join(manifest.paths.runtime, "consumer.lock");
   let lock;
@@ -87,7 +92,7 @@ export function lockStatus(manifest, now = Date.now(), probes = { kill: process.
   }
   if (probe.command) return { state: "running", pid: lock.pid, command: probe.command, evidence: "process-command", lockFile };
   const runtime = readRuntimeState(manifest);
-  if (freshHeartbeat(runtime, lock.pid, now)) {
+  if (freshHeartbeat(runtime, lock.pid, now) && heartbeatOwnsLock(runtime, lock)) {
     return { state: "running", pid: lock.pid, command: null, evidence: "private-heartbeat", signalProbe, commandProbe: probe.error, lockFile };
   }
   return { state: "unverifiable-lock", pid: lock.pid, signalProbe, commandProbe: probe.error, lockFile };
@@ -113,6 +118,13 @@ export function runtimeHealth(manifest, controller, now = Date.now()) {
     reasons,
     state,
   };
+}
+
+export function assertArmedHealth(wake) {
+  if (wake.status !== "ARMED") {
+    throw new Error(`startup is not armed: ${wake.status}${wake.reasons.length ? `: ${wake.reasons.join("; ")}` : ""}`);
+  }
+  return wake;
 }
 
 function doctor(manifest) {
@@ -255,7 +267,7 @@ async function waitArmed(manifest, timeoutMs = 180_000, logOffset = 0) {
     if (!armed) return null;
     const current = lockStatus(manifest);
     const wake = runtimeHealth(manifest, current);
-    if (wake.status === "RED") throw new Error(`startup is not armed: ${wake.reasons.join("; ")}`);
+    assertArmedHealth(wake);
     return armed;
   }, timeoutMs, "controller armed state");
 }
