@@ -90,8 +90,14 @@ A pane clears itself only after both steps:
 
 1. `/kijito-qa-memory` curates memory, writes a current-state note that begins with `RESUME NOW:`,
    and confirms with a fresh subagent that a cold start can resume. It records a pass token.
-2. `self-clear.sh` checks that the pane is armed, is in tmux, has a fresh token, and is under the
-   cycle cap.
+2. `self-clear.sh` checks that the kill switch is off, the pane is armed, it is not a subagent, it is
+   in tmux, the target pane is alive, and the pass token is **fresh**.
+
+Every one of those is a property of *this* clear — above all, "is the handoff good enough to survive
+it?" A count-based cycle cap and an every-N human checkpoint used to sit here too and were removed on
+2026-07-29: measured over 88 cycles they accounted for 19 of 24 refusals and never once caught a
+loop, because a count measures uptime, not runaway. If a runaway ever needs catching, detect the loop
+(consecutive cycles landing no commits and no memories) rather than the count.
 
 It then runs `/clear`. The SessionStart hook catches the new session up and it resumes from the note.
 To stop all autonomous sending and clearing, create the file `~/.claude/.lifecycle/STOP`.
@@ -110,7 +116,12 @@ token (`~/.claude/kijito-qa-pass.sh`). Kijito is the default backend, not a requ
 bash tests/lc_test.sh
 ```
 
-Covers arming, the token gate, the cycle cap, the checkpoint, the kill switch, and auto-send.
+Covers arming, the token gate (both directions — a stale handoff refuses, a fresh one fires), the
+kill switch, auto-send, and a regression guard that the removed count gates stay removed.
+
+By default this exercises the scripts **in this repo** — the ones that actually ship. Set
+`KIJITO_TEST_TARGET=installed` to run it against `~/.claude` instead, and `bash tests/drift_test.sh`
+to report when those two disagree.
 
 ## License
 

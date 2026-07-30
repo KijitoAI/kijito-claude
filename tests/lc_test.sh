@@ -5,7 +5,21 @@ set -u
 unset KIJITO_AUTOCATCHUP 2>/dev/null   # this shell may have it lingering; don't let it pollute tests
 LCT="/tmp/lctest.$$"; rm -rf "$LCT"; mkdir -p "$LCT"
 export KIJITO_LC_DIR="$LCT" CLAUDE_CODE_SESSION_ID=testsess KIJITO_LC_TEST=1
-LIB=~/.claude/lifecycle-lib.sh; SC=~/.claude/self-clear.sh; QP=~/.claude/kijito-qa-pass.sh; AS=~/.claude/session-autosend.sh
+# ── WHICH COPY IS UNDER TEST (this used to be hardcoded to ~/.claude, and that was the bug) ──
+# The suite tested the INSTALLED scripts, never the ones this repo ships. So the repo could pass
+# while shipping something else entirely, and repo-vs-install drift was invisible to it: on
+# 2026-07-29 four of nine scripts had drifted (install AHEAD by 3 days to 5 weeks) and the suite
+# reported red — against the repo's own tests, for a change made only to the install.
+# Default is now the REPO copy, i.e. the thing that actually ships. Set KIJITO_TEST_TARGET=installed
+# to exercise ~/.claude instead (what your machine is really running); tests/drift_test.sh reports
+# when the two disagree.
+SDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
+if [ "${KIJITO_TEST_TARGET:-repo}" = "installed" ]; then SDIR="$HOME/.claude"; fi
+echo "== target: ${KIJITO_TEST_TARGET:-repo} ($SDIR) =="
+LIB="$SDIR/lifecycle-lib.sh"; SC="$SDIR/self-clear.sh"; QP="$SDIR/kijito-qa-pass.sh"; AS="$SDIR/session-autosend.sh"
+# The scripts resolve their own lib next to themselves; pin it so a repo run can never silently
+# source the installed lib (the exact confusion this block exists to end).
+export KIJITO_LC_LIB="$LIB"
 pass=0; fail=0
 chk(){ if [ "$2" = "$3" ]; then echo "  PASS: $1 (exit $3)"; pass=$((pass+1)); else echo "  FAIL: $1 (want $2 got $3)"; fail=$((fail+1)); fi; }
 ok(){ echo "  PASS: $1"; pass=$((pass+1)); }
@@ -34,19 +48,44 @@ tmux capture-pane -t $S -p | grep -q "/clear" && ok "/clear delivered to pane" |
 [ -f "$LCT/qa-pass.testsess" ] && no "token NOT consumed" || ok "token consumed"
 KIJITO_AUTOCATCHUP=1 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; chk "no reuse without fresh token" 5 $?
 
-echo "== cycle cap (max=2, checkpoint off) — pane-keyed =="
-rm -f "$LCT"/cycles.*
-for i in 1 2; do KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1; \
-  KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_MAX_CYCLES=2 KIJITO_SELFCLEAR_CHECKPOINT=0 KIJITO_SELFCLEAR_DELAY=0.1 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; done
-KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
-KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_MAX_CYCLES=2 KIJITO_SELFCLEAR_CHECKPOINT=0 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; chk "cycle cap exceeded" 7 $?
+# ── THE CYCLE CAP + EVERY-N CHECKPOINT TESTS WERE REMOVED HERE, DELIBERATELY. DO NOT RESTORE. ──
+# Both gates were deleted from self-clear.sh on 2026-07-29 on Jason's explicit instruction, with the
+# measurement recorded at the removal site (self-clear.sh "C2"): over 88 successful cycles and 24
+# refusals, 19 of the 24 were those two COUNT gates, and neither ever caught a loop. A count cannot
+# distinguish a runaway loop from a productive day, because it measures uptime.
+#
+# ⚠️ These two assertions then OUTLIVED the contract they tested, and a later session read the
+# resulting red as "the runaway-loop backstop is broken in a published package" and came close to
+# re-introducing the counter Jason had just ordered removed. A deliberate removal and a regression
+# look IDENTICAL at the test boundary — so the note lives here, next to the assertions, where a
+# reader arriving from a failure will actually be standing.
+#
+# ⛔ If a genuine runaway ever needs catching, assert the LOOP, not the count: consecutive cycles
+# landing no commits and no memories. Do not add a counter assertion back.
+#
+# What replaces them below is the property that ever did the protecting: a clear requires a FRESH
+# cold-boot-verified handoff token, so a thin or stale handoff cannot self-clear.
 
-echo "== checkpoint (every 2) =="
+echo "== self-clear is gated on handoff FRESHNESS, not on a cycle count =="
 rm -f "$LCT"/cycles.*
+# A STALE token must refuse (exit 5) even though every other gate passes — this is the real backstop.
 KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
-KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_CHECKPOINT=2 KIJITO_SELFCLEAR_MAX_CYCLES=99 KIJITO_SELFCLEAR_DELAY=0.1 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1  # cycle1 fires
+tok_dir="$LCT"; stale=$(( $(date +%s) - 99999 ))
+for f in "$tok_dir"/qa-pass.*; do [ -f "$f" ] && echo "$stale" > "$f"; done
+KIJITO_AUTOCATCHUP=1 KIJITO_QA_TTL=1800 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; chk "stale handoff refused" 5 $?
+# And a FRESH token fires, proving the gate discriminates rather than always refusing (both
+# directions — a gate that only ever refuses is not a gate, it is an outage).
 KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
-KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_CHECKPOINT=2 KIJITO_SELFCLEAR_MAX_CYCLES=99 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; chk "checkpoint at cycle 2" 8 $?
+KIJITO_AUTOCATCHUP=1 KIJITO_QA_TTL=1800 KIJITO_SELFCLEAR_DELAY=0.1 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1; chk "fresh handoff fires" 0 $?
+
+echo "== the cap is GONE: many consecutive cycles are permitted (regression guard on the removal) =="
+rm -f "$LCT"/cycles.*
+capfail=0
+for i in 1 2 3 4 5 6 7; do
+  KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
+  KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_DELAY=0.05 TMUX="$TM" TMUX_PANE="$S" bash "$SC" >/dev/null 2>&1 || capfail=$?
+done
+[ "$capfail" -eq 0 ] && ok "7 consecutive cycles all fired (no count gate)" || no "a count gate refused at cycle >=1 (exit $capfail) — the cap was reintroduced"
 
 echo "== pane-keyed cycle persists across sid change (the /clear-rotates-sid fix) =="
 rm -f "$LCT"/cycles.*
