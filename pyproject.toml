@@ -35,22 +35,23 @@ kijito-claude = "kijito_claude.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/kijito_claude"]
 
-# The bash scripts, skills, install.sh, and the CLAUDE.md snippet live at the repo root so
-# they double as the git-clone install path. Pull them into the wheel under the package so
-# importlib.resources can find them at runtime.
+# The per-provider payloads (bash scripts, skills, each provider's own installer) and the
+# repo-root dispatcher live outside src/ so the tree doubles as the git-clone install path. Pull
+# them into the wheel under the package so importlib.resources can find them at runtime.
+#
+# ⚠️ providers/ MUST be included WHOLESALE, not enumerated per provider. Two reasons, both
+# measured: (1) the codex installer hash-gates providers/codex/test/codex-hive-watch.test.mjs, so
+# omitting the tests from the payload makes every codex install throw; (2) an enumerated list is a
+# fifth place to forget when a provider is added, and this repo already carries four.
 [tool.hatch.build.targets.wheel.force-include]
-"scripts" = "kijito_claude/_assets/scripts"
-"skills" = "kijito_claude/_assets/skills"
+"providers" = "kijito_claude/_assets/providers"
 "install.sh" = "kijito_claude/_assets/install.sh"
-"CLAUDE.md.snippet" = "kijito_claude/_assets/CLAUDE.md.snippet"
 
 [tool.hatch.build.targets.sdist]
 include = [
   "src/",
-  "scripts/",
-  "skills/",
+  "providers/",
   "install.sh",
-  "CLAUDE.md.snippet",
   "README.md",
   "LICENSE",
   "NOTICE",

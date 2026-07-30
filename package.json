@@ -9,10 +9,9 @@
   },
   "files": [
     "bin/",
-    "scripts/",
-    "skills/",
+    "providers/",
     "install.sh",
-    "CLAUDE.md.snippet"
+    "NOTICE"
   ],
   "engines": {
     "node": ">=18"

@@ -51,6 +51,8 @@ Update your living current-state / next-steps pointer (e.g. a stable memory you 
 Prove the memory works in a context that has never seen this conversation. Spawn a **fresh general-purpose subagent** (NOT a fork — a fork inherits your context and would cheat the test). Give it only this:
 
 > You are a brand-new session. Connect to Kijito and cold-boot: `kijito_startup(persona="<P>", project="<J>")`, then read the current-state pointer it names and the memories it links. Using ONLY what Kijito returns (you have no other context), report:
+> — Require ONE unambiguous top current-state result and FAIL the boot if it is absent or tied with another plausible live pointer.
+> — Treat a predecessor marked `Source: version_history`, or one reachable only by a `version_of` edge at importance ≤ 0.1, as retired audit history regardless of its body; note it exists but never follow its `RESUME NOW`. Judge liveness by `importance`/`confidence`, NOT by the `Status:` field, which reads `active` on believed-false records.
 > 1. the single active task in progress,
 > 2. the exact next step to take right now,
 > 3. what is already done vs. not,

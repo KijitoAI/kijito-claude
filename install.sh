@@ -1,56 +1,74 @@
 #!/usr/bin/env bash
-# kijito-claude installer — deploys the toolkit into ~/.claude and merges settings.json.
-# Idempotent + non-destructive: backs up settings.json, jq-merges keys (no clobber), de-dups the hook.
-# Also the cross-machine/fleet installer: clone the repo on any box and run this.
+# kijito-claude — provider dispatcher.
+#
+# This repo installs the Kijito session toolkit for more than one agent host. Each host is a
+# PROVIDER under providers/, owns its own installer, and installs to its own location:
+#
+#   claude  (default)  providers/claude/install.sh    → ~/.claude          — bash scripts + skills
+#   codex              providers/codex/install.mjs    → ~/.local/share/…   — Node wake controller
+#
+#   ./install.sh                      # claude, unchanged from before the providers/ split
+#   ./install.sh --provider codex     # codex
+#   ./install.sh --list-providers
+#
+# ⚠️ THE DEFAULT IS LOAD-BEARING AND MUST STAY `claude`. `npx kijito-claude` and
+# `pipx run kijito-claude` both land here with no arguments, and they have been installing the
+# Claude toolkit since 0.1.0. Changing the default would silently retarget every existing user.
+#
+# Unrecognized arguments are passed through to the provider's own installer untouched, so a
+# provider can add flags without this file needing to know about them.
 set -euo pipefail
-REPO="$(cd "$(dirname "$0")" && pwd)"
-DEST="$HOME/.claude"
-command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required."; exit 1; }
-command -v tmux >/dev/null 2>&1 || echo "WARN: tmux not found — armed-pane autonomy + auto-send need tmux. (Context self-check works without it.)"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+PROVIDERS_DIR="$ROOT/providers"
 
-mkdir -p "$DEST/skills" "$DEST/.lifecycle"
+list_providers() {
+  # _shared holds provider-neutral code, not a provider. Anything else with an installer counts.
+  for d in "$PROVIDERS_DIR"/*/; do
+    name="$(basename "$d")"
+    [ "$name" = "_shared" ] && continue
+    if [ -f "$d/install.sh" ] || [ -f "$d/install.mjs" ]; then echo "$name"; fi
+  done
+}
 
-# 1) scripts → ~/.claude (executable)
-for s in "$REPO"/scripts/*.sh; do install -m 0755 "$s" "$DEST/$(basename "$s")"; done
-echo "✓ scripts installed → $DEST"
+usage() {
+  echo "usage: install.sh [--provider <name>] [provider args...]"
+  echo
+  echo "providers:"
+  list_providers | sed 's/^/  /'
+  echo
+  echo "default provider: claude"
+}
 
-# 2) skills (optional helpers — every skill in skills/ gets deployed)
-for d in "$REPO"/skills/*/; do
-  name="$(basename "$d")"
-  [ -f "$d/SKILL.md" ] || continue
-  mkdir -p "$DEST/skills/$name"
-  install -m 0644 "$d/SKILL.md" "$DEST/skills/$name/SKILL.md"
-  echo "✓ skill: $name"
+PROVIDER="claude"
+# bash 3.2 (the macOS default) errors on "${arr[@]}" when arr is empty under `set -u`, so this
+# array is always expanded through the ${arr[@]+...} guard below.
+PASSTHROUGH=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --provider)
+      [ $# -ge 2 ] || { echo "ERROR: --provider needs a value" >&2; exit 2; }
+      PROVIDER="$2"; shift 2 ;;
+    --provider=*) PROVIDER="${1#*=}"; shift ;;
+    --list-providers) list_providers; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) PASSTHROUGH+=("$1"); shift ;;
+  esac
 done
 
-# 2b) the CLAUDE.md doctrine snippet — copied alongside so npx/pipx users (who never cloned
-# the repo) still have it to paste into ~/.claude/CLAUDE.md.
-if [ -f "$REPO/CLAUDE.md.snippet" ]; then
-  install -m 0644 "$REPO/CLAUDE.md.snippet" "$DEST/kijito-claude.CLAUDE.md.snippet"
-  echo "✓ doctrine snippet → $DEST/kijito-claude.CLAUDE.md.snippet"
+PROVIDER_DIR="$PROVIDERS_DIR/$PROVIDER"
+if [ "$PROVIDER" = "_shared" ] || [ ! -d "$PROVIDER_DIR" ]; then
+  echo "ERROR: unknown provider '$PROVIDER'. Known providers:" >&2
+  list_providers | sed 's/^/  /' >&2
+  exit 2
 fi
 
-# 3) settings.json — merge statusLine / totalTokensReminder / env / SessionStart hook (idempotent)
-SET="$DEST/settings.json"; [ -f "$SET" ] || echo '{}' > "$SET"
-cp "$SET" "$SET.bak.$(date +%Y%m%d%H%M%S)"
-HOOK=$(jq -n --arg cmd "bash $DEST/session-catchup-hint.sh" \
-  '{matcher:"startup|clear|compact", hooks:[{type:"command", command:$cmd}]}')
-jq --arg home "$DEST" --argjson hook "$HOOK" '
-  .statusLine = {type:"command", command:("bash " + $home + "/statusline-context.sh"), padding:0}
-  | .totalTokensReminder = (.totalTokensReminder // "countdown")
-  | .env = ((.env // {}) + {KIJITO_AUTOCATCHUP_DELAY: ((.env.KIJITO_AUTOCATCHUP_DELAY) // "4.0")})
-  | .hooks = (.hooks // {})
-  | .hooks.SessionStart = (
-      ((.hooks.SessionStart // [])
-        | map(select([ (.hooks[]?.command // "") ] | any(test("session-catchup-hint")) | not)))
-      + [$hook] )
-' "$SET" > "$SET.tmp"
-jq -e . "$SET.tmp" >/dev/null
-mv "$SET.tmp" "$SET"
-echo "✓ settings.json merged (backup: $SET.bak.*)"
-
-echo
-echo "Next: add the doctrine snippet to your ~/.claude/CLAUDE.md (context self-check + session-start"
-echo "catch-up + self-clear gate). It's at $DEST/kijito-claude.CLAUDE.md.snippet"
-echo "New sessions pick up the hook + statusline; restart a running session to apply."
-echo "Verify context self-check now:  ~/.claude/myctx.sh"
+if [ -f "$PROVIDER_DIR/install.sh" ]; then
+  exec bash "$PROVIDER_DIR/install.sh" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+elif [ -f "$PROVIDER_DIR/install.mjs" ]; then
+  command -v node >/dev/null 2>&1 || {
+    echo "ERROR: provider '$PROVIDER' needs Node.js 20+ on PATH." >&2; exit 1; }
+  exec node "$PROVIDER_DIR/install.mjs" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+else
+  echo "ERROR: provider '$PROVIDER' has no install.sh or install.mjs." >&2
+  exit 2
+fi

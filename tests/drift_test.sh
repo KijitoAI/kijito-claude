@@ -34,8 +34,8 @@ newer() {
   else echo "same mtime, different bytes"; fi
 }
 
-echo "== scripts: $REPO/scripts  vs  $DEST =="
-for s in "$REPO"/scripts/*.sh; do
+echo "== claude scripts: $REPO/providers/claude/scripts  vs  $DEST =="
+for s in "$REPO"/providers/claude/scripts/*.sh; do
   n=$(basename "$s"); i="$DEST/$n"
   if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
   if [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(shasum -a 256 "$i" | cut -d' ' -f1)" ]; then
@@ -45,8 +45,8 @@ for s in "$REPO"/scripts/*.sh; do
   fi
 done
 
-echo "== skills: $REPO/skills  vs  $DEST/skills =="
-for d in "$REPO"/skills/*/; do
+echo "== claude skills: $REPO/providers/claude/skills  vs  $DEST/skills =="
+for d in "$REPO"/providers/claude/skills/*/; do
   n=$(basename "$d"); i="$DEST/skills/$n/SKILL.md"
   [ -f "$d/SKILL.md" ] || continue
   if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
@@ -57,6 +57,25 @@ for d in "$REPO"/skills/*/; do
   fi
 done
 
+# The codex provider installs its skills to ~/.codex/skills. This lane is why drift_test exists:
+# codex's two skills lived ONLY here, unversioned, and were the acute rescue in the 2026-07-30 fold.
+CODEX_SKILLS="${KIJITO_CODEX_SKILLS_DIR:-$HOME/.codex/skills}"
+if [ -d "$CODEX_SKILLS" ]; then
+  echo "== codex skills: $REPO/providers/codex/skills  vs  $CODEX_SKILLS =="
+  for d in "$REPO"/providers/codex/skills/*/; do
+    n=$(basename "$d"); i="$CODEX_SKILLS/$n/SKILL.md"
+    [ -f "$d/SKILL.md" ] || continue
+    if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
+    if [ "$(shasum -a 256 "$d/SKILL.md" | cut -d' ' -f1)" = "$(shasum -a 256 "$i" | cut -d' ' -f1)" ]; then
+      printf "  ok       %s\n" "$n"; same=$((same+1))
+    else
+      printf "  DRIFT    %-26s %s\n" "$n" "$(newer "$d/SKILL.md" "$i")"; drift=$((drift+1))
+    fi
+  done
+else
+  echo "== codex skills: SKIP (no $CODEX_SKILLS on this machine) =="
+fi
+
 # Files present in the install but with no repo counterpart. NOT drift — an install dir legitimately
 # holds unrelated local tools — but worth naming, since an artifact with no upstream anywhere is
 # exactly how the 2026-07-29 gap arose. Reported, never failed on.
@@ -65,7 +84,7 @@ found_only=0
 for i in "$DEST"/*.sh; do
   [ -f "$i" ] || continue
   n=$(basename "$i")
-  [ -f "$REPO/scripts/$n" ] || { printf "  local-only  %s\n" "$n"; found_only=1; }
+  [ -f "$REPO/providers/claude/scripts/$n" ] || { printf "  local-only  %s\n" "$n"; found_only=1; }
 done
 [ "$found_only" -eq 0 ] && echo "  (none)"
 

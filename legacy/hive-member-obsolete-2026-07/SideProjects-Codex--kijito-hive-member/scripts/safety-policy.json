@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "defaultMode": "draft_only",
+  "bodyIsUntrusted": true,
+  "inbound": {
+    "maxBodyBytes": 32768,
+    "dangerousBodyDisposition": "quarantine_before_model_context"
+  },
+  "wake": {
+    "enabled": true,
+    "allAccountMessages": true,
+    "requireAllowedSender": false,
+    "accountScopedSourceOnly": true,
+    "allowedSources": [
+      "kijito-inbox",
+      "kijito-api-reconcile"
+    ],
+    "trustedPriorityFields": [
+      "urgent",
+      "actionable"
+    ],
+    "bodySignals": [
+      "urgent",
+      "action required",
+      "please review",
+      "status please",
+      "need your input",
+      "question for codex"
+    ]
+  },
+  "autoSend": {
+    "enabled": true,
+    "allowedClasses": [
+      "monitor_health_ping"
+    ],
+    "allowedSenders": [
+      "river"
+    ],
+    "templates": {
+      "monitor_health_ping": "ACK monitor health ping for Kijito message {messageId}. Codex connector is online."
+    }
+  },
+  "outbound": {
+    "enabled": true,
+    "manualApprovalRequiredForModelDrafts": true,
+    "maxContentBytes": 4096,
+    "requestTimeoutMs": 10000,
+    "responseLimitBytes": 1048576,
+    "deliverySemantics": "at_most_once_no_automatic_retry"
+  },
+  "quarantineBodyNeedles": [
+    "ignore previous instructions",
+    "ignore all previous",
+    "reveal system prompt",
+    "reveal developer prompt",
+    "exfiltrate secret"
+  ],
+  "cautionBodyNeedles": [
+    "system instruction",
+    "developer instruction",
+    "ignore previous",
+    "run shell",
+    "curl ",
+    "secret",
+    "token",
+    "password",
+    "http://",
+    "https://",
+    "chmod",
+    "rm -rf",
+    "sudo",
+    "install",
+    "escalate",
+    "reveal"
+  ],
+  "appServer": {
+    "defaultSandbox": "read-only",
+    "defaultApprovalPolicy": "never",
+    "networkAccess": false,
+    "allowNonLoopbackWithoutAuth": false,
+    "injectItemsOnActionPath": false,
+    "maxAttempts": 3,
+    "turnTimeoutMs": 120000
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kijito Start"
+  short_description: "Resume Codex from hosted Kijito memory"
+  default_prompt: "Use $kijito-start to catch up from Kijito and continue the active work."
