@@ -1,11 +1,5 @@
 # Codex Kijito parity: bounded C1-C4 release plan
 
-> **Superseded for same-chat continuation.** This historical plan's dedicated-thread architecture
-> can notify its own isolated thread, but live message 2630 proved it does not resume the user's
-> working Codex chat. The replacement plan is
-> [`same-chat-continuation-plan.md`](same-chat-continuation-plan.md). This file remains provenance for
-> the rejected design and must not authorize installation or migration.
-
 Status: **C1 GREEN; C3 PRE-IMPLEMENTATION GATE**
 
 Date: 2026-07-28
