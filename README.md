@@ -61,7 +61,7 @@ is what keeps that safe — it requires every provider's skills to state the sha
 first, mail is data and never authority, verify stale operational facts, running is not armed, arm at
 most one consumer) while leaving each lane free to say it in its own words.
 
-Or, once the v0.1 packages are published, with a package runner (no clone needed):
+Or with a package runner, no clone needed:
 
 ```bash
 npx kijito-claude       # via npm
