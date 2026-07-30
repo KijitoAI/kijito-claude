@@ -40,7 +40,8 @@ function fixture() {
   const ordinary = path.join(root, "ordinary");
   const monitor = path.join(root, "monitor");
   fs.mkdirSync(ordinary, { mode: 0o700 });
-  fs.mkdirSync(monitor, { mode: 0o700 });
+  fs.mkdirSync(monitor, { mode: 0o755 });
+  fs.chmodSync(monitor, 0o755);
   const auth = path.join(ordinary, "auth.json");
   const config = path.join(ordinary, "config.toml");
   const token = path.join(root, "token");
@@ -134,6 +135,10 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o775);
+    const writableLockParent = run([f.launcher, "doctor"], 1);
+    assert.match(writableLockParent.stderr, /global consumer-lock directory is not a user-owned, non-group\/other-writable real directory/);
+    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o755);
     fs.renameSync(f.events, `${f.events}.held`);
     const missingEvents = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
     assert.equal(missingEvents.status, "RED");
@@ -202,6 +207,11 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
     fs.appendFileSync(f.events, `${JSON.stringify({ source: "kijito-inbox", persona: "codex", event: "new", id: 7701 })}\n`);
     fs.writeFileSync(beforeManifest.paths.lockFile, `${JSON.stringify({ pid: 999999, token: "stale-consumer", persona: "codex" })}\n`, { mode: 0o600 });
     fs.writeFileSync(`${beforeManifest.paths.lockFile}.upgrade`, `${JSON.stringify({ pid: 999999, token: "stale-upgrade", persona: "codex", operation: "upgrade" })}\n`, { mode: 0o600 });
+
+    fs.chmodSync(path.dirname(beforeManifest.paths.lockFile), 0o775);
+    const writableUpgradeParent = run(upgradeArgs(f), 1);
+    assert.match(writableUpgradeParent.stderr, /upgrade-lock directory must be a user-owned, non-group\/other-writable real directory/);
+    fs.chmodSync(path.dirname(beforeManifest.paths.lockFile), 0o755);
 
     const upgraded = JSON.parse(run(upgradeArgs(f)).stdout);
     assert.equal(upgraded.status, "UPGRADED_INACTIVE");

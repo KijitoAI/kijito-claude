@@ -26,19 +26,23 @@ function tempFixture() {
   const codexHome = path.join(root, "home");
   const workspace = path.join(root, "workspace");
   const runtime = path.join(root, "runtime");
+  const monitor = path.join(root, "monitor");
   for (const dir of [codexHome, workspace, runtime]) fs.mkdirSync(dir, { mode: 0o700 });
+  fs.mkdirSync(monitor, { mode: 0o755 });
+  fs.chmodSync(monitor, 0o755);
   fs.writeFileSync(path.join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
   fs.writeFileSync(path.join(codexHome, "config.toml"), "default_permissions = \"hive-read\"\n", { mode: 0o600 });
-  const eventsFile = path.join(root, "events.codex.ndjson");
+  const eventsFile = path.join(monitor, "events.codex.ndjson");
   fs.writeFileSync(eventsFile, "", { mode: 0o600 });
   return {
     root,
     codexHome,
     workspace,
     runtime,
+    monitor,
     eventsFile,
     stateFile: path.join(runtime, "state.json"),
-    lockFile: path.join(runtime, "consumer.lock"),
+    lockFile: path.join(monitor, "consumer.codex.lock"),
     traceFile: path.join(root, "trace.ndjson"),
   };
 }
@@ -138,6 +142,10 @@ test("runtime path validator rejects non-private and non-empty boundaries", () =
     fs.chmodSync(fixture.runtime, 0o755);
     assert.throws(() => validateRuntimePaths(options), /runtime directory must not grant/);
     fs.chmodSync(fixture.runtime, 0o700);
+    fs.chmodSync(fixture.monitor, 0o775);
+    assert.throws(() => validateRuntimePaths(options), /global consumer-lock directory must not be group\/other writable/);
+    fs.chmodSync(fixture.monitor, 0o755);
+    validateRuntimePaths(options);
     fs.chmodSync(fixture.eventsFile, 0o644);
     assert.throws(() => validateRuntimePaths(options), /events file must be private/);
   } finally { cleanup(fixture); }

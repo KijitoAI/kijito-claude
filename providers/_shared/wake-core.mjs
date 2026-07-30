@@ -178,6 +178,16 @@ export function requirePrivateDirectory(dir, label) {
   if ((stat.mode & 0o077) !== 0) throw new Error(`${label} must not grant group/other access`);
 }
 
+// Shared monitor directories commonly need to be traversable by local tooling, so 0755 is a
+// valid production shape. Ownership and mutation are the security boundary here: another uid
+// must never be able to replace or remove the global consumer lock.
+export function requireOwnedNonWritableDirectory(dir, label) {
+  const stat = fs.lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} must be a real directory`);
+  if (stat.uid !== process.getuid()) throw new Error(`${label} must be owned by current uid`);
+  if ((stat.mode & 0o022) !== 0) throw new Error(`${label} must not be group/other writable`);
+}
+
 export function requirePrivateEventFile(file) {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("events file must be one regular file");

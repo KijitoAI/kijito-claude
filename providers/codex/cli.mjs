@@ -30,6 +30,13 @@ function checkRealPrivateDirectory(dir, label) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) throw new Error(`${label} is not a private user-owned real directory`);
 }
 
+function checkRealOwnedNonWritableDirectory(dir, label) {
+  const stat = fs.lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) {
+    throw new Error(`${label} is not a user-owned, non-group/other-writable real directory`);
+  }
+}
+
 function checkPrivateFile(file, label) {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) throw new Error(`${label} is not one private user-owned regular file`);
@@ -161,7 +168,7 @@ export function doctor(manifest) {
   checkRealPrivateDirectory(manifest.paths.codexHome, "dedicated Codex home");
   checkRealPrivateDirectory(manifest.paths.workspace, "dedicated workspace");
   checkRealPrivateDirectory(manifest.paths.runtime, "runtime directory");
-  checkRealPrivateDirectory(path.dirname(lockFileFor(manifest)), "global consumer-lock directory");
+  checkRealOwnedNonWritableDirectory(path.dirname(lockFileFor(manifest)), "global consumer-lock directory");
   checkRealPrivateDirectory(path.dirname(controllerFile), "controller directory");
   checkRealPrivateDirectory(path.dirname(wakeCoreFile), "shared wake-core directory");
   if (fs.readdirSync(manifest.paths.workspace).length !== 0) throw new Error("dedicated workspace is not empty");

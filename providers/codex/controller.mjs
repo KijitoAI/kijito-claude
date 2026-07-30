@@ -36,6 +36,7 @@ import {
   loadState as coreLoadState,
   parseEventLine as coreParseEventLine,
   releaseLock,
+  requireOwnedNonWritableDirectory,
   requirePrivateDirectory,
   requirePrivateEventFile,
   saveState,
@@ -71,7 +72,7 @@ export function validateRuntimePaths({ codexHome, workspace, eventsFile, stateFi
   const stateRoot = path.dirname(stateFile);
   const lockRoot = path.dirname(lockFile);
   requirePrivateDirectory(stateRoot, "runtime directory");
-  requirePrivateDirectory(lockRoot, "global consumer-lock directory");
+  requireOwnedNonWritableDirectory(lockRoot, "global consumer-lock directory");
   try { requirePrivateEventFile(eventsFile); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }

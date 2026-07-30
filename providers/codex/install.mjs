@@ -112,6 +112,13 @@ function requirePrivateDirectory(dir, label) {
   }
 }
 
+function requireOwnedNonWritableDirectory(dir, label) {
+  const stat = fs.lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) {
+    throw new Error(`${label} must be a user-owned, non-group/other-writable real directory`);
+  }
+}
+
 function requireExecutable(file, label) {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0) throw new Error(`${label} must be an executable regular file`);
@@ -317,7 +324,7 @@ function runLauncher(launcher, args, nodeBin, timeout = 210_000) {
 }
 
 function acquireUpgradeLock(file) {
-  requirePrivateDirectory(path.dirname(file), "upgrade-lock directory");
+  requireOwnedNonWritableDirectory(path.dirname(file), "upgrade-lock directory");
   const token = randomBytes(16).toString("hex");
   const create = () => {
     const fd = fs.openSync(file, "wx", 0o600);

@@ -87,6 +87,11 @@ the same persona. Mail written during the bounded swap remains after the inherit
 consumed on the new run. A failed new start restores and re-arms the previous installation; a
 private rollback root is retained after success and reported in the command result.
 
+The shared monitor directory that owns the global lock may be `0755`, matching the monitor's
+production layout. It must be a real directory owned by the current uid and may not be writable by
+group or other users (`0775`/`0777` are rejected). The event stream and lock files themselves remain
+private `0600`; the dedicated Codex home, workspace, runtime, and install directories remain `0700`.
+
 Uninstall is manifest-bound and confirm-required:
 
 ```sh
