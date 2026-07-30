@@ -62,6 +62,11 @@ The release manifest owns the dedicated `~/.local/share/codex-kijito-hive` tree 
 the monitor event directory. Run the installer with a healthy Node 20+ runtime, then use the
 explicit launcher:
 
+The Kijito inbox monitor must be installed and running first: its private
+`~/.cache/kijito-inbox-monitor/events.codex.ndjson` event file must already exist before either a
+fresh install or `--upgrade`. The installer deliberately validates that real producer-owned file;
+it does not create a look-alike stream on the consumer's behalf.
+
 ```sh
 node install.mjs                 # or, from the repo root: ./install.sh --provider codex
 codex-kijito-hive doctor
@@ -89,6 +94,16 @@ bounded swap remains after the inherited cursor and is consumed on the new run. 
 restores and re-arms the previous installation; a private rollback root is retained after success
 and reported in the command result.
 
+Upgrade refuses silent changes to the installed ordinary-auth source, ordinary config, token file,
+or Node runtime. If a non-default path was used for the original installation, pass the same path
+flags again. The configured Codex executable is the deliberate exception: upgrading from a legacy
+version-pinned release path to the stable Codex symlink is supported and reported by `doctor`.
+
+At most the two newest private `.rollback.*` roots and the two newest `.failed.*` roots are retained
+after a successful upgrade; older safe, user-owned `0700` historical roots are pruned. These roots
+contain a private copy of the dedicated Codex home, including `auth.json`, so they are recovery
+artifacts rather than ordinary build output. A failed upgrade never prunes its own recovery bytes.
+
 The shared monitor directory may be `0755`, matching the monitor's production layout. It must be a
 real directory owned by the current uid and may not be writable by group or other users
 (`0775`/`0777` are rejected). The event stream remains private `0600`. Consumer and upgrade locks,
@@ -99,6 +114,12 @@ controller invocations and the live-gate helper derive the same event-directory/
 caller cannot substitute a per-runtime lock while consuming the selected stream. The installer and
 controller accept an explicit lock option only when it resolves to that exact deterministic path,
 and `doctor` rejects a manifest that diverges.
+
+The pre-canonical flat controller used a different runtime-local lock. Therefore its live ownership
+cannot exclude a new-version controller mechanically. Never run `test/prepare-live-gate.mjs`, a
+direct new controller, or a second new-code installation against the real stream while the legacy
+`runtime/consumer.lock` exists. The live-gate helper refuses that condition. The supported cutover
+is the single `--upgrade` transaction, which stops the legacy owner before arming canonical bytes.
 
 The installed manifest preserves the configured Codex executable path instead of resolving it to a
 versioned release directory. This intentionally follows a stable vendor symlink across a normal

@@ -71,8 +71,10 @@ function fixture() {
   const realBin = path.join(root, "codex-real");
   const bin = path.join(root, "codex");
   const startDelayFile = path.join(root, "delay-app-server-start");
+  const startupFailEnableFile = path.join(root, "fail-first-startup-turn");
+  const startupFailMarker = path.join(root, "failed-first-startup-turn");
   const quote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
-  fs.writeFileSync(realBin, `#!/bin/sh\nif [ -f ${quote(startDelayFile)} ]; then sleep 2; fi\nexec ${quote(process.execPath)} ${quote(mockAppServer)} "$@"\n`, { mode: 0o700 });
+  fs.writeFileSync(realBin, `#!/bin/sh\nif [ -f ${quote(startDelayFile)} ]; then sleep 2; fi\nif [ -f ${quote(startupFailEnableFile)} ]; then exec env PROBE_FAIL_TURN_START_AT=1 PROBE_FAIL_TURN_START_MARKER=${quote(startupFailMarker)} ${quote(process.execPath)} ${quote(mockAppServer)} "$@"; fi\nexec ${quote(process.execPath)} ${quote(mockAppServer)} "$@"\n`, { mode: 0o700 });
   fs.chmodSync(realBin, 0o700);
   fs.symlinkSync(realBin, bin);
   return {
@@ -82,7 +84,7 @@ function fixture() {
     // Hermetic skills target. Without this the installer's default (~/.codex/skills) would make
     // the test suite deploy into the developer's real Codex install.
     skillsRoot: path.join(root, "codex-skills"),
-    auth, config, token, events, bin, realBin, startDelayFile,
+    auth, config, token, events, bin, realBin, startDelayFile, startupFailEnableFile, startupFailMarker,
   };
 }
 
@@ -132,6 +134,76 @@ function installArgs(f) {
     "--node-bin", process.execPath,
     "--skills-root", f.skillsRoot,
   ];
+}
+
+function installLegacyFlatFixture(f, { stopFailsAfterExit = false, statusFails = false, stopSucceedsWithoutExit = false } = {}) {
+  const runtime = path.join(f.installRoot, "runtime");
+  const codexHome = path.join(f.installRoot, "codex-home");
+  const workspace = path.join(f.installRoot, "workspace");
+  const legacyLock = path.join(runtime, "consumer.lock");
+  const stopFailureFile = path.join(f.root, "legacy-stop-fails-after-exit");
+  const statusFailureFile = path.join(f.root, "legacy-status-fails");
+  const statusFailureEnableFile = path.join(f.root, "legacy-status-fails-after-stop");
+  const falseStopSuccessFile = path.join(f.root, "legacy-stop-succeeds-without-exit");
+  const startCountFile = path.join(f.root, "legacy-start-count");
+  for (const dir of [f.installRoot, runtime, codexHome, workspace, path.dirname(f.launcher)]) {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(dir, 0o700);
+  }
+  fs.copyFileSync(f.auth, path.join(codexHome, "auth.json"));
+  fs.chmodSync(path.join(codexHome, "auth.json"), 0o600);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), "hooks = false\n", { mode: 0o600 });
+  fs.writeFileSync(path.join(f.installRoot, "controller.mjs"), "// legacy flat controller fixture\n", { mode: 0o600 });
+  const eventStat = fs.statSync(f.events);
+  fs.writeFileSync(path.join(runtime, "state.json"), `${JSON.stringify({
+    schema: 1,
+    persona: "codex",
+    threadId: "mock-thread-1",
+    eventFile: { dev: eventStat.dev, ino: eventStat.ino },
+    offset: 0,
+    partialBase64: "",
+    lastMailId: 7000,
+    recentKeys: [],
+    pendingItems: [],
+    lastAttempt: null,
+    ambiguous: null,
+    degraded: null,
+    recovery: null,
+  }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(legacyLock, `${JSON.stringify({ pid: process.pid, token: "legacy-token", persona: "codex" })}\n`, { mode: 0o600 });
+  if (stopFailsAfterExit) fs.writeFileSync(stopFailureFile, "fail\n", { mode: 0o600 });
+  if (statusFails) fs.writeFileSync(statusFailureEnableFile, "fail\n", { mode: 0o600 });
+  if (stopSucceedsWithoutExit) fs.writeFileSync(falseStopSuccessFile, "fail\n", { mode: 0o600 });
+  const quote = (value) => JSON.stringify(value);
+  const legacyCli = path.join(f.installRoot, "legacy-cli.mjs");
+  const legacyCliText = `import fs from "node:fs";\nconst lock=${quote(legacyLock)};\nconst stopFailure=${quote(stopFailureFile)};\nconst statusFailure=${quote(statusFailureFile)};\nconst statusFailureEnable=${quote(statusFailureEnableFile)};\nconst falseStopSuccess=${quote(falseStopSuccessFile)};\nconst starts=${quote(startCountFile)};\nconst command=process.argv[2] ?? "status";\nif (command === "status") { if (fs.existsSync(statusFailure)) { console.error("intentional legacy status failure"); process.exitCode=1; } else console.log(JSON.stringify({status:{state:fs.existsSync(lock)?"running":"stopped"}})); }\nelse if (command === "stop") { if (!fs.existsSync(falseStopSuccess)) { try { fs.unlinkSync(lock); } catch (e) { if (e.code !== "ENOENT") throw e; } } if (fs.existsSync(statusFailureEnable)) fs.writeFileSync(statusFailure,"fail\\n",{mode:0o600}); if (fs.existsSync(stopFailure)) { console.error("intentional legacy stop timeout after exit"); process.exitCode=1; } else console.log(JSON.stringify({status:"STOPPED"})); }\nelse if (command === "start") { fs.writeFileSync(lock, JSON.stringify({pid:process.pid,token:"legacy-rearmed",persona:"codex"})+"\\n", {mode:0o600}); fs.appendFileSync(starts,"start\\n"); console.log(JSON.stringify({status:"ARMED"})); }\nelse { console.error("unknown legacy command"); process.exitCode=1; }\n`;
+  fs.writeFileSync(legacyCli, legacyCliText, { mode: 0o600 });
+  const shellQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const launcher = `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(legacyCli)} "$@"\n`;
+  fs.writeFileSync(f.launcher, launcher, { mode: 0o700 });
+  fs.chmodSync(f.launcher, 0o700);
+  const manifest = {
+    schema: 1,
+    product: "codex-kijito-hive",
+    version: "0.legacy",
+    installId: "legacy-install",
+    paths: {
+      installRoot: path.join(fs.realpathSync(path.dirname(f.installRoot)), path.basename(f.installRoot)),
+      launcher: path.join(fs.realpathSync(path.dirname(f.launcher)), path.basename(f.launcher)),
+      codexHome,
+      workspace,
+      runtime,
+      tokenFile: f.token,
+      eventsFile: f.events,
+      codexBin: fs.realpathSync(f.bin),
+      nodeBin: fs.realpathSync(process.execPath),
+      ordinaryConfig: f.config,
+      ordinaryAuth: f.auth,
+    },
+    hashes: {},
+  };
+  fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  return { legacyLock, stopFailureFile, statusFailureFile, statusFailureEnableFile, falseStopSuccessFile, startCountFile, manifest };
 }
 
 test("release install, doctor, duplicate refusal, and manifest-bound uninstall", () => {
@@ -188,6 +260,16 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(corruptLock.status, "RED");
     assert.equal(corruptLock.wake.status, "RED");
     assert.match(corruptLock.reasons.join(" "), /integrity check failed/);
+    for (const args of [
+      ["status"], ["start"], ["stop"], ["wait-armed"], ["smoke"], ["run"],
+      ["uninstall", "--confirm-dedicated-home"],
+    ]) {
+      const verdict = JSON.parse(run([f.launcher, ...args], 1).stdout);
+      assert.equal(verdict.status, "RED", `${args[0]} returns a structured fail-closed verdict`);
+      assert.equal(verdict.wake.status, "RED");
+      assert.equal(verdict.command, args[0]);
+      assert.match(verdict.reasons.join(" "), /integrity check failed/);
+    }
     fs.unlinkSync(manifest.paths.lockFile);
     const manifestFile = path.join(f.installRoot, "installed-manifest.json");
     const validManifestText = fs.readFileSync(manifestFile, "utf8");
@@ -292,6 +374,26 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
   } finally { cleanupFixture(f); }
 });
 
+test("successful upgrades retain only the two newest private rollback roots", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const reported = [];
+    for (let pass = 0; pass < 4; pass += 1) {
+      const upgraded = JSON.parse(run(upgradeArgs(f)).stdout);
+      assert.equal(upgraded.status, "UPGRADED_INACTIVE");
+      reported.push(upgraded.rollbackRoot);
+    }
+    const roots = fs.readdirSync(path.dirname(f.installRoot))
+      .filter((name) => name.startsWith(`${path.basename(f.installRoot)}.rollback.`));
+    assert.equal(roots.length, 2);
+    assert.equal(fs.existsSync(reported[0]), false);
+    assert.equal(fs.existsSync(reported[1]), false);
+    assert.equal(fs.existsSync(reported[2]), true);
+    assert.equal(fs.existsSync(reported[3]), true);
+  } finally { cleanupFixture(f); }
+});
+
 test("upgrade preflight rejection leaves the running old consumer and lock token untouched", () => {
   const f = fixture();
   try {
@@ -313,6 +415,23 @@ test("upgrade preflight rejection leaves the running old consumer and lock token
   } finally { cleanupFixture(f); }
 });
 
+test("upgrade refuses configured-path drift before stopping the running consumer", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    run([f.launcher, "start"]);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const beforeLock = fs.readFileSync(manifest.paths.lockFile, "utf8");
+    const alternateToken = path.join(f.root, "alternate-token");
+    fs.writeFileSync(alternateToken, `kjt_${"y".repeat(32)}\n`, { mode: 0o600 });
+    const rejected = run([...upgradeArgs(f), "--token-file", alternateToken], 1);
+    assert.match(rejected.stderr, /upgrade cannot silently change Kijito token file/);
+    assert.equal(fs.readFileSync(manifest.paths.lockFile, "utf8"), beforeLock);
+    assert.equal(JSON.parse(run([f.launcher, "status"]).stdout).wake.status, "ARMED");
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
 test("upgrade of an armed controller returns armed on the same dedicated thread", () => {
   const f = fixture();
   try {
@@ -329,6 +448,68 @@ test("upgrade of an armed controller returns armed on the same dedicated thread"
     assert.equal(after.degraded, null);
     assert.equal(after.recovery, null);
     assert.equal(after.clientStatus, "idle");
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("running legacy flat ownership upgrades to canonical ARMED state on the same thread", () => {
+  const f = fixture();
+  try {
+    const legacy = installLegacyFlatFixture(f);
+    const upgraded = JSON.parse(run(upgradeArgs(f)).stdout);
+    assert.equal(upgraded.status, "UPGRADED_ARMED");
+    assert.equal(upgraded.preserved.threadId, "mock-thread-1");
+    assert.equal(upgraded.preserved.lastMailId, 7000);
+    assert.equal(upgraded.doctor.status, "ARMED");
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const state = JSON.parse(fs.readFileSync(path.join(manifest.paths.runtime, "state.json"), "utf8"));
+    assert.equal(state.threadId, "mock-thread-1");
+    assert.equal(state.clientStatus, "idle");
+    assert.equal(fs.existsSync(legacy.legacyLock), false);
+    assert.equal(fs.existsSync(manifest.paths.lockFile), true);
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("failed legacy stop that already exited is re-armed before upgrade returns failure", () => {
+  const f = fixture();
+  try {
+    const legacy = installLegacyFlatFixture(f, { stopFailsAfterExit: true });
+    const failed = run(upgradeArgs(f), 1);
+    assert.match(failed.stderr, /existing controller did not stop cleanly/);
+    assert.match(failed.stderr, /pre-swap controller re-armed after failed stop/);
+    assert.equal(fs.existsSync(legacy.legacyLock), true);
+    assert.equal(fs.readFileSync(legacy.startCountFile, "utf8").trim().split("\n").length, 1);
+    assert.equal(JSON.parse(run([f.launcher, "status"]).stdout).status.state, "running");
+    fs.unlinkSync(legacy.stopFailureFile);
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("failed legacy stop with unverifiable ownership refuses a blind re-arm", () => {
+  const f = fixture();
+  try {
+    const legacy = installLegacyFlatFixture(f, { stopFailsAfterExit: true, statusFails: true });
+    const failed = run(upgradeArgs(f), 1);
+    assert.match(failed.stderr, /existing controller did not stop cleanly/);
+    assert.match(failed.stderr, /ownership is unverifiable, refusing blind re-arm/);
+    assert.equal(fs.existsSync(legacy.startCountFile), false);
+    assert.equal(fs.existsSync(legacy.legacyLock), false);
+    fs.unlinkSync(legacy.statusFailureFile);
+    fs.unlinkSync(legacy.stopFailureFile);
+  } finally { cleanupFixture(f); }
+});
+
+test("legacy stop success must prove ownership stopped before canonical swap", () => {
+  const f = fixture();
+  try {
+    const legacy = installLegacyFlatFixture(f, { stopSucceedsWithoutExit: true });
+    const failed = run(upgradeArgs(f), 1);
+    assert.match(failed.stderr, /did not prove stopped ownership after stop/);
+    assert.equal(fs.existsSync(legacy.legacyLock), true);
+    assert.equal(fs.existsSync(legacy.startCountFile), false);
+    assert.equal(JSON.parse(run([f.launcher, "status"]).stdout).status.state, "running");
+    fs.unlinkSync(legacy.falseStopSuccessFile);
     run([f.launcher, "stop"]);
   } finally { cleanupFixture(f); }
 });
@@ -381,6 +562,34 @@ test("hard-crash restart and SIGUSR1 stay RED until the current arming attempt c
       return state.clientStatus === "idle" && state.armedAt && state.armedAttemptId === state.armAttemptId;
     }, 10_000);
     assert.equal(JSON.parse(run([f.launcher, "doctor"]).stdout).status, "ARMED");
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("start follows forward recovery attempts and returns ARMED instead of stopping the recovered controller", async () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    fs.writeFileSync(f.startupFailEnableFile, "fail once\n", { mode: 0o600 });
+    const started = await runAsync(f.launcher, ["start"]);
+    assert.equal(started.code, 0, started.stderr || started.stdout);
+    const result = JSON.parse(started.stdout);
+    assert.equal(result.status, "ARMED");
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const state = JSON.parse(fs.readFileSync(path.join(manifest.paths.runtime, "state.json"), "utf8"));
+    assert.equal(state.ambiguous, null);
+    assert.equal(state.degraded, null);
+    assert.equal(state.clientStatus, "idle");
+    assert.equal(state.armedRunId, state.controllerRunId);
+    assert.equal(state.armedAttemptId, state.armAttemptId);
+    const rows = fs.readFileSync(path.join(manifest.paths.runtime, "controller.ndjson"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line));
+    const attempts = rows.filter((row) => row.event === "arming");
+    assert.ok(attempts.length >= 2, "startup failure must advance into a recovery arming attempt");
+    assert.equal(new Set(attempts.map((row) => row.runId)).size, 1, "recovery stays within the same controller run");
+    assert.ok(new Set(attempts.map((row) => row.armAttemptId)).size >= 2);
+    const status = JSON.parse(run([f.launcher, "status"]).stdout);
+    assert.equal(status.wake.status, "ARMED", "the launcher must leave the self-recovered controller running");
     run([f.launcher, "stop"]);
   } finally { cleanupFixture(f); }
 });
@@ -481,7 +690,9 @@ test("two install roots sharing one event-directory/persona stream cannot double
     const firstStarted = JSON.parse(run([first.launcher, "start"]).stdout);
     assert.equal(firstStarted.status, "ARMED");
     const refused = run([second.launcher, "start"], 1);
-    assert.match(refused.stderr, /EEXIST|cannot start from state (?:running|pid-mismatch)|controller ownership/);
+    const refusedVerdict = JSON.parse(refused.stdout);
+    assert.equal(refusedVerdict.status, "RED");
+    assert.match(refusedVerdict.reasons.join(" "), /EEXIST|cannot start from state (?:running|pid-mismatch)|controller ownership/);
     const firstStatus = JSON.parse(run([first.launcher, "status"]).stdout);
     assert.equal(firstStatus.wake.status, "ARMED");
     const secondManifest = JSON.parse(fs.readFileSync(path.join(second.installRoot, "installed-manifest.json"), "utf8"));
@@ -533,6 +744,18 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
       fs.writeFileSync(target, bytes, { mode: 0o600 });
       run([f.launcher, "doctor"]);
     }
+    const wakeCore = path.join(f.installRoot, "_shared", "wake-core.mjs");
+    const wakeCoreBytes = fs.readFileSync(wakeCore);
+    const fallbackCore = path.join(path.dirname(f.installRoot), "_shared", "wake-core.mjs");
+    fs.mkdirSync(path.dirname(fallbackCore), { mode: 0o700 });
+    fs.writeFileSync(fallbackCore, wakeCoreBytes, { mode: 0o600 });
+    fs.unlinkSync(wakeCore);
+    const missingCore = JSON.parse(run([f.launcher, "status"], 1).stdout);
+    assert.equal(missingCore.status, "RED");
+    assert.equal(missingCore.command, "status");
+    assert.match(missingCore.reasons.join(" "), /integrity check failed/);
+    fs.writeFileSync(wakeCore, wakeCoreBytes, { mode: 0o600 });
+    run([f.launcher, "doctor"]);
     const launcherBytes = fs.readFileSync(f.launcher);
     fs.appendFileSync(f.launcher, "\n# tamper\n");
     run([f.launcher, "uninstall", "--confirm-dedicated-home"], 1);
@@ -581,13 +804,21 @@ test("drift gate compares installed Codex controller, shared core, and CLI bytes
   } finally { cleanupFixture(f); }
 });
 
-test("smoke command fences armed evidence to its own run and arming generation", () => {
-  const cli = fs.readFileSync(path.join(packageRoot, "cli.mjs"), "utf8");
-  assert.match(cli, /const logOffset = fs\.existsSync\(logFile\) \? fs\.statSync\(logFile\)\.size : 0/);
-  assert.match(cli, /const expectedRun = await waitFor/);
-  assert.match(cli, /const armed = await waitArmed\(manifest, 180_000, logOffset, expectedRun\)/);
-  assert.match(cli, /armed: started\.armed/);
-  assert.match(cli, /bytes\.subarray\(logOffset\)/);
+test("smoke behavior accepts only its own armed generation and leaves the controller inactive", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    const smoke = JSON.parse(run([f.launcher, "smoke"]).stdout);
+    assert.equal(smoke.status, "ARMED");
+    assert.equal(smoke.started.status, "ARMED");
+    assert.equal(smoke.armed.runId, smoke.started.armed.runId);
+    assert.equal(smoke.armed.armAttemptId, smoke.started.armed.armAttemptId);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const after = JSON.parse(run([f.launcher, "status"]).stdout);
+    assert.equal(after.status.state, "stopped");
+    assert.equal(after.wake.status, "INACTIVE");
+    assert.equal(fs.existsSync(manifest.paths.lockFile), false);
+  } finally { cleanupFixture(f); }
 });
 
 test("startup skill requires strong ARMED predicates and rejects clean INACTIVE as arm evidence", () => {
@@ -683,6 +914,57 @@ test("wait-armed rejects a historical armed row from a different live controller
       probes,
     );
     assert.equal(armed.threadId, "current-thread");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("wait-armed adopts a forward recovery attempt within the same controller run", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-forward-arm."));
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  const token = "forward-token";
+  const now = Date.now();
+  const stateFile = path.join(runtime, "state.json");
+  const logFile = path.join(runtime, "controller.ndjson");
+  const writeState = (attempt, armed = false) => fs.writeFileSync(stateFile, `${JSON.stringify({
+    schema: 1,
+    persona: "codex",
+    controllerPid: 4242,
+    controllerRunId: "stable-run",
+    armAttemptId: attempt,
+    armedRunId: armed ? "stable-run" : null,
+    armedAttemptId: armed ? attempt : null,
+    armedAt: armed ? new Date().toISOString() : null,
+    heartbeatAt: new Date().toISOString(),
+    clientStatus: armed ? "idle" : "starting",
+    lockTokenHash: createHash("sha256").update(token).digest("hex"),
+  })}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(runtime, "consumer.lock"), `${JSON.stringify({ pid: 4242, token, persona: "codex" })}\n`, { mode: 0o600 });
+  fs.writeFileSync(logFile, `${JSON.stringify({ ts: new Date(now).toISOString(), event: "arming", runId: "stable-run", armAttemptId: "attempt-1" })}\n`, { mode: 0o600 });
+  writeState("attempt-1");
+  const probes = {
+    kill: () => {},
+    command: () => ({ command: `${process.execPath} ${path.join(packageRoot, "codex", "controller.mjs")}`, error: null }),
+  };
+  try {
+    const waiting = waitArmed(
+      { paths: { runtime } },
+      1_000,
+      0,
+      { runId: "stable-run", armAttemptId: "attempt-1" },
+      probes,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    writeState("attempt-2", true);
+    fs.appendFileSync(logFile, `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: "armed",
+      threadId: "recovered-thread",
+      runId: "stable-run",
+      armAttemptId: "attempt-2",
+    })}\n`);
+    const armed = await waiting;
+    assert.equal(armed.threadId, "recovered-thread");
+    assert.equal(armed.armAttemptId, "attempt-2");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

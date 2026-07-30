@@ -476,8 +476,8 @@ export class HiveWakeController {
     void this.flush();
   }
 
-  async flush() {
-    if (this.busy || this.recovering || this.stopping || this.pending.length === 0 || this.state.ambiguous || this.state.degraded) return;
+  async flush({ allowRestarting = false } = {}) {
+    if (this.busy || this.recovering || (this.restarting && !allowRestarting) || this.stopping || this.pending.length === 0 || this.state.ambiguous || this.state.degraded) return;
     if (this.client.status !== "idle") {
       if (this.client.status === "unavailable") this.handleClientExit(this.client, { reason: "app-server unavailable before delivery", expected: false });
       return;
@@ -618,7 +618,7 @@ export class HiveWakeController {
   }
 
   async recover() {
-    if (this.stopping || this.busy || this.recovering || (!this.state.ambiguous && !this.state.degraded)) return;
+    if (this.stopping || this.busy || this.recovering || this.restarting || (!this.state.ambiguous && !this.state.degraded)) return;
     this.recovering = true;
     this.recoveryAttempts += 1;
     const recoveringAmbiguity = Boolean(this.state.ambiguous);
@@ -729,7 +729,7 @@ export class HiveWakeController {
     try {
       await this.replaceClient();
       this.reconcile("codex-restart");
-      await this.flush();
+      await this.flush({ allowRestarting: true });
       if (!this.stopping && !this.state.ambiguous && !this.state.degraded) this.markArmed("rearmed-after-codex-restart");
     } catch (error) {
       this.state.degraded = {

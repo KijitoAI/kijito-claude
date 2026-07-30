@@ -19,6 +19,7 @@ import {
   saveState,
   validateRuntimePaths,
 } from "../controller.mjs";
+import { assertNoLegacyConsumer } from "./prepare-live-gate.mjs";
 
 const mockAppServer = fileURLToPath(new URL("./mock-app-server.mjs", import.meta.url));
 
@@ -148,7 +149,10 @@ test("direct controller defaults to the deterministic event-directory/persona lo
       "--events", fixture.eventsFile,
       "--token-file", tokenFile,
     ]);
-    assert.equal(parsed.lockFile, defaultConsumerLockFile(fixture.eventsFile));
+    assert.equal(parsed.lockFile, path.join(path.dirname(fixture.eventsFile), ".codex-hive-locks", "consumer.codex.lock"));
+    assert.equal(defaultConsumerLockFile(fixture.eventsFile), parsed.lockFile);
+    const cliSource = fs.readFileSync(new URL("../cli.mjs", import.meta.url), "utf8");
+    assert.doesNotMatch(cliSource, /consumer\.codex\.lock/, "CLI must use the controller-bound shared lock derivation");
     assert.notEqual(parsed.lockFile, path.join(fixture.runtime, "consumer.lock"));
     assert.throws(() => defaultConsumerLockFile(fixture.eventsFile, "../codex"), /filename-safe/);
     assert.throws(() => parseArgs([
@@ -501,6 +505,67 @@ test("stop drains an in-progress app-server replacement before stopping the new 
   } finally { cleanup(fixture); }
 });
 
+test("restart excludes poll delivery and recovery until exactly one replacement child is ready", async () => {
+  const fixture = tempFixture();
+  const controller = new HiveWakeController({ ...fixture, output: () => {} });
+  let releaseOldStop;
+  let oldStopPromise;
+  let oldWakeCalls = 0;
+  let replacementCount = 0;
+  let replacementWakeCalls = 0;
+  try {
+    controller.lock = acquireLock(fixture.lockFile);
+    controller.state.threadId = "test-thread";
+    controller.client = {
+      status: "idle",
+      threadId: "test-thread",
+      wake: async () => { oldWakeCalls += 1; throw new Error("stopping child received delivery"); },
+      stop: async () => {
+        oldStopPromise ??= new Promise((resolve) => { releaseOldStop = resolve; });
+        return oldStopPromise;
+      },
+    };
+    controller.makeClient = () => {
+      replacementCount += 1;
+      return {
+        status: "starting",
+        threadId: "test-thread",
+        start: async function start() { this.status = "idle"; return "test-thread"; },
+        wake: async () => { replacementWakeCalls += 1; return { turnId: "replacement-turn", text: "ok", digest: "digest" }; },
+        waitForIdle: async () => {},
+        stop: async () => {},
+      };
+    };
+    controller.queue({ kind: "new", id: 4301, key: "new:4301", trigger: "mail" });
+    const restarting = controller.restartCodex();
+    await waitUntil(() => typeof releaseOldStop === "function");
+    controller.state.degraded = { at: new Date().toISOString(), reason: "probe", phase: "probe" };
+    const recovering = controller.recover();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const recoveryWasExcluded = controller.recovering === false;
+    controller.state.degraded = null;
+    await controller.flush();
+    controller.poll();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const oldDeliveryWasExcluded = oldWakeCalls === 0;
+    const concurrentReplacementWasExcluded = replacementCount === 0;
+    releaseOldStop();
+    await Promise.all([restarting, recovering]);
+    assert.equal(recoveryWasExcluded, true, "recovery must remain excluded for the whole explicit restart");
+    assert.equal(oldDeliveryWasExcluded, true, "poll must not deliver through the child being replaced");
+    assert.equal(concurrentReplacementWasExcluded, true, "recovery must not create a concurrent replacement during restart");
+    assert.equal(oldWakeCalls, 0, "poll must not deliver through the child being replaced");
+    assert.equal(replacementCount, 1, "one restart creates exactly one replacement child");
+    assert.equal(replacementWakeCalls, 1, "queued mail and restart reconciliation flush on the replacement");
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.degraded, null);
+  } finally {
+    releaseOldStop?.();
+    await controller.stop().catch(() => {});
+    cleanup(fixture);
+  }
+});
+
 test("completed wake is durably surfaced before a missing idle transition degrades liveness", async () => {
   const fixture = tempFixture();
   const logs = [];
@@ -657,9 +722,15 @@ test("release source contains no lifecycle or current-thread injection mechanism
   }
 });
 
-test("live-gate helper delegates to the deterministic event-directory/persona lock", () => {
-  const source = fs.readFileSync(new URL("./prepare-live-gate.mjs", import.meta.url), "utf8");
-  assert.match(source, /const lockFile = defaultConsumerLockFile\(eventsFile\)/);
-  assert.match(source, /mkdirSync\(path\.dirname\(lockFile\),\s*\{ recursive: true, mode: 0o700 \}\)/);
-  assert.doesNotMatch(source, /lockFile:\s*path\.join\(runtime,\s*["']consumer\.lock["']\)/);
+test("live-gate helper refuses unresolved legacy ownership before preparing canonical paths", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-live-gate-guard."));
+  const legacyLock = path.join(root, "runtime", "consumer.lock");
+  try {
+    fs.mkdirSync(path.dirname(legacyLock), { recursive: true, mode: 0o700 });
+    assert.doesNotThrow(() => assertNoLegacyConsumer(legacyLock));
+    fs.writeFileSync(legacyLock, `${JSON.stringify({ pid: process.pid, token: "legacy", persona: "codex" })}\n`, { mode: 0o600 });
+    assert.throws(() => assertNoLegacyConsumer(legacyLock), /refusing live gate while legacy consumer lock exists/);
+    fs.unlinkSync(legacyLock);
+    assert.doesNotThrow(() => assertNoLegacyConsumer(legacyLock));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

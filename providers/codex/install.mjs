@@ -449,6 +449,43 @@ function copyUpgradeRuntime(oldRuntime, newRuntime, eventsFile) {
   return state;
 }
 
+function requireUpgradePathContinuity(options, oldManifest) {
+  for (const [optionKey, manifestKey, label] of [
+    ["authSource", "ordinaryAuth", "ordinary auth source"],
+    ["ordinaryConfig", "ordinaryConfig", "ordinary config"],
+    ["tokenFile", "tokenFile", "Kijito token file"],
+    ["nodeBin", "nodeBin", "Node runtime"],
+  ]) {
+    const installed = oldManifest.paths?.[manifestKey];
+    if (typeof installed === "string" && options[optionKey] !== installed) {
+      throw new Error(`upgrade cannot silently change ${label}: installed ${installed}, requested ${options[optionKey]}`);
+    }
+  }
+}
+
+function pruneHistoricalRoots(installRoot, keepPerKind = 2) {
+  const parent = path.dirname(installRoot);
+  const base = path.basename(installRoot);
+  const removed = [];
+  for (const kind of ["rollback", "failed"]) {
+    const prefix = `${base}.${kind}.`;
+    const candidates = fs.readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.name.startsWith(prefix) && entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => {
+        const file = path.join(parent, entry.name);
+        const stat = fs.lstatSync(file);
+        return { file, stat };
+      })
+      .filter(({ stat }) => stat.uid === process.getuid() && (stat.mode & 0o077) === 0)
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || b.file.localeCompare(a.file));
+    for (const { file } of candidates.slice(keepPerKind)) {
+      fs.rmSync(file, { recursive: true, force: false });
+      removed.push(file);
+    }
+  }
+  return removed;
+}
+
 function upgrade(options) {
   requireAbsoluteDistinct(options);
   ensureLockDirectory(options.eventsFile, options.lockFile);
@@ -462,6 +499,7 @@ function upgrade(options) {
     throw new Error("existing installation identity mismatch");
   }
   if (oldManifest.paths.eventsFile !== options.eventsFile) throw new Error("upgrade cannot change the event stream");
+  requireUpgradePathContinuity(options, oldManifest);
   const upgradeLock = `${options.lockFile}.upgrade`;
   const heldUpgradeLock = acquireUpgradeLock(upgradeLock);
 
@@ -472,7 +510,6 @@ function upgrade(options) {
   const backupLauncher = `${options.launcher}.rollback.${suffix}`;
   const failedRoot = `${options.installRoot}.failed.${suffix}`;
   let wasRunning = false;
-  let oldStopped = false;
   let backupRootReady = false;
   let backupLauncherReady = false;
   let newRootReady = false;
@@ -494,7 +531,10 @@ function upgrade(options) {
 
     const stopped = runLauncher(options.launcher, ["stop"], options.nodeBin, 170_000);
     if (stopped.status !== 0) throw new Error(`existing controller did not stop cleanly: ${stopped.stderr || stopped.stdout}`);
-    oldStopped = true;
+    const stoppedOwnership = runLauncher(options.launcher, ["status"], options.nodeBin, 30_000);
+    if (stoppedOwnership.json?.status?.state !== "stopped") {
+      throw new Error(`existing controller did not prove stopped ownership after stop: ${stoppedOwnership.stderr || stoppedOwnership.stdout}`);
+    }
 
     const preserved = copyUpgradeRuntime(oldManifest.paths.runtime, path.join(stagedRoot, "runtime"), options.eventsFile);
     const nextManifestFile = path.join(stagedRoot, "installed-manifest.json");
@@ -532,6 +572,7 @@ function upgrade(options) {
     const expected = wasRunning ? "ARMED" : "INACTIVE";
     if (health.status !== 0 || health.json?.status !== expected) throw new Error(`upgraded doctor is not ${expected}: ${health.stderr || health.stdout}`);
     const skills = installSkills(options);
+    const prunedHistoricalRoots = pruneHistoricalRoots(options.installRoot);
     return {
       status: wasRunning ? "UPGRADED_ARMED" : "UPGRADED_INACTIVE",
       installRoot: options.installRoot,
@@ -542,6 +583,7 @@ function upgrade(options) {
       armed,
       doctor: health.json,
       skills,
+      prunedHistoricalRoots,
       recoverable: true,
     };
   } catch (error) {
@@ -566,9 +608,19 @@ function upgrade(options) {
         if (restored.status !== 0) error.message += `; rollback controller failed to re-arm: ${restored.stderr || restored.stdout}`;
         else error.message += "; previous installation restored and re-armed";
       }
-    } else if (oldStopped && wasRunning) {
-      const restored = runLauncher(options.launcher, ["start"], options.nodeBin);
-      if (restored.status !== 0) error.message += `; pre-swap controller failed to re-arm: ${restored.stderr || restored.stdout}`;
+    } else if (wasRunning) {
+      // A stop command can fail or time out after the old controller has already exited. Inspect
+      // ownership and re-arm whenever it is no longer running, even though the stop call did not
+      // return success and the normal stopped-path checkpoint was therefore never reached.
+      const current = runLauncher(options.launcher, ["status"], options.nodeBin, 30_000);
+      const currentState = current.json?.status?.state;
+      if (["stopped", "stale-lock"].includes(currentState)) {
+        const restored = runLauncher(options.launcher, ["start"], options.nodeBin);
+        if (restored.status !== 0) error.message += `; pre-swap controller failed to re-arm: ${restored.stderr || restored.stdout}`;
+        else error.message += "; pre-swap controller re-armed after failed stop";
+      } else if (currentState !== "running") {
+        error.message += `; pre-swap controller ownership is unverifiable, refusing blind re-arm: ${current.stderr || current.stdout}`;
+      }
     }
     throw error;
   } finally {

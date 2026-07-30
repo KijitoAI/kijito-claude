@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const installRoot = path.dirname(fileURLToPath(import.meta.url));
 const manifestFile = path.join(installRoot, "installed-manifest.json");
@@ -12,6 +12,19 @@ const manifestFile = path.join(installRoot, "installed-manifest.json");
 // controller's import specifier is the same in the repo and in the install.
 const controllerFile = path.join(installRoot, "codex", "controller.mjs");
 const wakeCoreFile = path.join(installRoot, "_shared", "wake-core.mjs");
+// An installed CLI is identified by its private manifest and must never fall back outside that
+// install root when the installed shared core is missing. The sibling path exists only for direct
+// imports from the repository layout, where no installed manifest exists beside this file.
+const wakeCoreModuleFile = fs.existsSync(manifestFile) ? wakeCoreFile : path.join(installRoot, "..", "_shared", "wake-core.mjs");
+let coreDefaultConsumerLockFile;
+let wakeCoreImportError = null;
+try {
+  ({ defaultConsumerLockFile: coreDefaultConsumerLockFile } = await import(pathToFileURL(wakeCoreModuleFile)));
+} catch (error) { wakeCoreImportError = error; }
+const defaultConsumerLockFile = (eventsFile) => {
+  if (wakeCoreImportError) throw wakeCoreImportError;
+  return coreDefaultConsumerLockFile(eventsFile, "codex");
+};
 
 function sha256(file) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
@@ -79,7 +92,7 @@ function readRuntimeState(manifest) {
 
 function lockFileFor(manifest) {
   return manifest.paths.lockFile
-    ?? (manifest.paths.eventsFile ? path.join(path.dirname(manifest.paths.eventsFile), ".codex-hive-locks", "consumer.codex.lock") : path.join(manifest.paths.runtime, "consumer.lock"));
+    ?? (manifest.paths.eventsFile ? defaultConsumerLockFile(manifest.paths.eventsFile) : path.join(manifest.paths.runtime, "consumer.lock"));
 }
 
 function freshHeartbeat(state, pid, now = Date.now()) {
@@ -174,7 +187,7 @@ export function assertArmedHealth(wake) {
 }
 
 function inspectDoctor(manifest) {
-  const expectedLockFile = path.join(path.dirname(manifest.paths.eventsFile), ".codex-hive-locks", "consumer.codex.lock");
+  const expectedLockFile = defaultConsumerLockFile(manifest.paths.eventsFile);
   if (lockFileFor(manifest) !== expectedLockFile) throw new Error("manifest consumer lock is not the deterministic lock under the event-stream directory");
   checkRealPrivateDirectory(installRoot, "install root");
   checkRealPrivateDirectory(manifest.paths.codexHome, "dedicated Codex home");
@@ -381,9 +394,11 @@ export async function waitArmed(
     if (!runtime?.controllerRunId || !runtime?.armAttemptId) return null;
     run ??= { runId: runtime.controllerRunId, armAttemptId: runtime.armAttemptId };
     if (!run.runId || !run.armAttemptId) return null;
-    if (runtime.controllerRunId !== run.runId || runtime.armAttemptId !== run.armAttemptId) {
-      throw new Error("controller arming generation changed while waiting");
-    }
+    if (runtime.controllerRunId !== run.runId) throw new Error("controller run changed while waiting for armed state");
+    // Recovery legitimately creates a newer arming attempt inside the same controller process.
+    // Follow that forward attempt within the original timeout instead of tearing down a controller
+    // which may already have self-recovered and armed. A different run remains fatal.
+    if (runtime.armAttemptId !== run.armAttemptId) run = { ...run, armAttemptId: runtime.armAttemptId };
     let bytes;
     try { bytes = fs.readFileSync(logFile); } catch { return null; }
     if (bytes.length < logOffset) throw new Error("controller log truncated after start");
@@ -426,6 +441,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+  if (wakeCoreImportError) throw wakeCoreImportError;
   let result;
   if (command === "doctor") result = doctor(manifest);
   else if (command === "status") {
@@ -434,6 +450,9 @@ async function main() {
     result = { status: controller, wake: { status: wake.status, reasons: wake.reasons } };
   }
   else if (command === "run") {
+    // Fail integrity problems (notably corrupt locks) through the same structured verdict path as
+    // every detached verb before handing stdio to the foreground controller.
+    lockStatus(manifest);
     const child = spawn(process.execPath, controllerArgs(manifest), { cwd: manifest.paths.workspace, env: safeEnv(), stdio: "inherit" });
     process.on("SIGINT", () => child.kill("SIGINT"));
     process.on("SIGTERM", () => child.kill("SIGTERM"));
@@ -456,7 +475,10 @@ async function main() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((error) => {
-    process.stderr.write(`${error.stack ?? error.message}\n`);
+    const command = process.argv[2] ?? "status";
+    const result = doctorFailure(null, error);
+    result.command = command;
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
   });
 }
