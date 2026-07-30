@@ -31,18 +31,33 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
      - ⚠️ **"UNREAD" IS NOT "UNHANDLED".** Peeking without consuming means a message you already acted on arrives looking new, so an inbox is a claim about the PAST while the tree is the PRESENT. Before a message becomes a task, check whether it is already done (`git log -S '<the defect string>'`, and compare the message's timestamp to the commit's).
    - **(b) Arm a LIVE wake-capable consumer — but IDEMPOTENTLY (arm at most once).** "Arm" means ongoing surfacing that re-invokes you per event, not a one-shot read. The wake-capable form is a persistent `Monitor` that streams each new event as a notification.
      - ⚠️ **Duplicate-arm trap (fix the cause here — this is why this step is idempotent):** `/clear` does NOT stop the prior session's monitor, and the `claude` process SURVIVES `/clear`. So this catch-up re-runs every session under the *same* process, and arming blindly ACCUMULATES monitors — each hive message then fires **N identical wake-notifications**, burning context (6 stacked ladybug monitors were observed over ~1 day). Always check-then-skip; never arm unconditionally.
-     - **Check first — is a live monitor already tailing your stream?**
+     - **Check first — is a live monitor already tailing your stream? ANCHOR THE PATTERN:**
        ```bash
-       pgrep -f "events\.<P>\.ndjson"    # prints a pid per live monitor
+       pgrep -f "^tail -n 0 -F .*events\.<P>\.ndjson"   # ONE line per live monitor
        ```
+       ⛔ **DO NOT use the unanchored `pgrep -f "events\.<P>\.ndjson"` — IT DOUBLE-COUNTS, and the
+       old version of this file told you to kill things because of it.** `pgrep -f` matches the whole
+       command line, so a single monitor matches **twice**: once as the `tail`, and once as the parent
+       shell whose command line *contains* the pipeline. **Measured 2026-07-30: one healthy monitor
+       printed two pids (`60199` the shell, `60201` the tail)**, which the rule below then read as
+       "you already hit the trap" — and the remedy it prescribed would have killed a **working**
+       inbox. Anchoring on `^tail` excludes the shell and returns exactly one line per monitor.
        - **prints nothing →** arm exactly ONE, wake-capable, via the Monitor tool (persistent):
          `Monitor(command="tail -n 0 -F ~/.cache/kijito-inbox-monitor/events.<P>.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)`
-       - **prints one pid →** already armed by a prior (pre-`/clear`) session; **STOP — do not start another.**
-       - **prints multiple →** you already hit the trap; keep one, kill the rest:
+       - **prints one line →** already armed by a prior (pre-`/clear`) session; **STOP — do not start another.**
+       - **prints two or more lines →** genuinely stacked; keep the newest, kill the rest:
          ```bash
-         ps -eo pid,etime,command | grep "events\.<P>\.ndjson" | grep -v grep   # keep newest (smallest etime)
-         # kill the older tail pids (and their parent shells) directly; TaskStop won't reach a prior session's task
+         ps -eo pid,etime,command | grep "^ *[0-9]* .*tail -n 0 -F .*events\.<P>\.ndjson" | grep -v grep
+         # keep newest (smallest etime); kill the older tail pids and their parent shells.
+         # TaskStop won't reach a prior session's task, so kill by pid here.
          ```
+     - ⛔ **`TaskList` IS NOT A RELIABLE IDEMPOTENCE CHECK — TRUST `pgrep`, NOT THE TASK LIST.**
+       **Measured 2026-07-30:** `TaskList` reported **"No tasks found"** while a monitor armed before
+       the `/clear` was still alive **and still delivering notifications into the current
+       conversation**. An agent that concludes "my task list is empty, so that tail must be a leaked
+       orphan that cannot wake me" arms a second monitor and every hive message then fires **twice** —
+       exactly the duplicate this step exists to prevent. The process is the ground truth; the task
+       list is a view that `/clear` can empty without stopping anything.
      - ⛔ **RUNNING IS NOT ARMED — verify the wake PATH, not just the process.** A pid proves something is alive; it does not prove events reach *you*. Three ways a live consumer still fails to wake you: the **producer** isn't writing (launchd `com.kijito.inbox-monitor` down — the stream goes silent, which is indistinguishable from "no mail"); the tail is on a **sibling persona's** stream; or the **filter** excludes the event kind you care about. Confirm the stream file for YOUR persona exists and is being appended to, then call it armed.
      - **Producer down / no ndjson?** If `~/.cache/kijito-inbox-monitor/` isn't being fed (launchd `com.kijito.inbox-monitor` down), fall back to polling `kijito_hive_inbox(persona="<P>", unread_only=true)` via MCP on a cadence (hits whatever brain your MCP targets; the supervised producer normally bridges the remote/prod inbox into this local ndjson, so tailing it works even when your MCP points at `api.kijito.ai`).
    - This step runs every session — including after `/clear` — but because it is idempotent it arms at most one monitor across the whole life of the `claude` process.
