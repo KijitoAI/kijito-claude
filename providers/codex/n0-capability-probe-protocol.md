@@ -4,9 +4,11 @@ Status: **PROTOCOL DRAFT — NO PROBE ACTION AUTHORIZED.**
 
 This protocol operationalizes only N0a and N0b of
 `same-chat-continuation-plan.md`. It is not provider code, a task prompt, a doctor implementation,
-an installation, or permission to create a Scheduled task. Assay must mark the exact protocol digest
-CLEAN before Codex prepares a test harness or asks Jason to perform the first attended marker action.
-Assay must separately review the frozen harness before any Scheduled task is created.
+an installation, or permission to create a Scheduled task. Assay must complete two consecutive
+zero-finding reviews from different angles on the exact unchanged protocol digest before Codex
+prepares a test harness or asks Jason to perform the first attended marker action. Assay must then
+complete the same two-consecutive-review gate on the frozen harness before any Scheduled task is
+created.
 
 Plan authority:
 
@@ -387,7 +389,8 @@ the exact effective prompt.
    `git rev-parse HEAD`, verify that exact object resolves, and pair it with a freshly computed file
    digest; an agent must never expand an abbreviated SHA from memory. No marker, nonce submission,
    task, harness, UI action, or sleep/lock probe occurs. Remediate findings and repeat until Assay says
-   CLEAN.
+   CLEAN in two consecutive zero-finding reviews from different angles on the same unchanged commit
+   and digest. Any finding or byte change resets the protocol counter to `0/2`.
 2. **Harness QA:** implement only the disposable snapshot/parser/oracle/fixture scripts and their
    tests. Use production-shaped synthetic rollouts and mutations for zero/multiple marker matches,
    wrong chat/run, mtime/newest guessing, symlink/path escape, concurrent mutation, task read/chmod/
@@ -400,7 +403,9 @@ the exact effective prompt.
    into the protocol, prompt, project, chat, or pre-run logs. Also mutate `JOURNAL_UNREACHABLE`,
    `SIGNER_UNARMED`, absent test mail, already-read test mail, and concurrent
    persona-`codex` mail mutation that must not affect the `codex-n0` oracle. Freeze one commit and
-   digest; Assay must mark it CLEAN before the first attended action.
+   digest; Assay must complete two consecutive zero-finding reviews from different angles on those
+   exact unchanged bytes before the first attended action. Any finding or byte change resets the
+   harness counter to `0/2`.
 3. **Attended marker:** generate the one-use marker nonce, freeze the pre-snapshot, and ask Jason for
    exactly one marker turn. If the attended marker is not submitted, N0a-M is BLOCKED; after one
    confirmed submission, zero or multiple rollout matches is RED.
