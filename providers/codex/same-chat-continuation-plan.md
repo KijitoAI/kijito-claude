@@ -5,9 +5,9 @@ Status: **PLAN ONLY.**
 **AUTHORITY:** Two consecutive Assay-CLEAN reviews of this exact plan digest open N0a/N0b only.
 GREEN N0 then authorizes disposable test-persona probes of the current N1-N3 surfaces, but no
 Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate
-provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews
-before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3
-are GREEN and Jason explicitly accepts N3.
+provider-neutral claim/operator-decision API plan owned by River must receive two consecutive
+Assay-CLEAN reviews before any such API code is written. An installable Codex provider remains
+forbidden until N0-N3 are GREEN and Jason explicitly accepts N3.
 
 Owner: Codex provider lane. River owns repository integration and any production cutover. Assay owns
 independent plan review. Jason owns residual-risk and measured-cost acceptance.
@@ -174,14 +174,31 @@ transaction merely because two simultaneous callers produce one winner.
 `CODEX_CONTINUATION_CHECKPOINT_V1` contains schema version, persona, armed task/chat ID, project/
 worktree/environment identity, permission profile, prompt digest, last completed ID, scan upper ID/
 cursor/verified ranges/pending IDs/byte count, optional active message ID/holder token/fence/lease
-expiry/intent, disposition and slice count/deadline, ambiguity evidence, operator-resolution record,
-native run/turn ID, pointer ID/digest, last successful heartbeat, last acknowledgment, and current
-health state/reason including the exact blocked message ID. Unknown/missing fields fail closed; doctor
-compares these exact fields rather than an informal identity claim.
+expiry/intent, disposition and slice count/deadline, ambiguity evidence, validated operator-decision
+ID/digest, native run/turn ID, pointer ID/digest, last successful heartbeat, last acknowledgment, and
+current health state/reason including the exact blocked message ID. This checkpoint namespace is
+run-authored only: it contains observations of operator decisions, never operator-authored authority.
+Unknown/missing fields fail closed; doctor compares these exact fields rather than an informal claim.
 
-N1 must either prove a stronger existing surface or independently gate a minimal provider-neutral
-`CONTINUATION_CLAIM_V1` surface before any Codex implementation. That surface must atomically return a
-unique holder token and monotonic fence, use a 180-second lease, renew only for the same holder every
+Operator authority lives only in a separate append-only
+`CODEX_CONTINUATION_OPERATOR_DECISION_V1` journal that doctor and the scheduled run can read but the
+scheduled run's principal, tools, sandbox, and workspace cannot create, append, replace, or delete.
+No operator-authored checkpoint or control-plane field may be writable by a scheduled run. An
+attended helper outside the scheduled environment signs a canonical envelope containing schema,
+persona, `T`, message ID, observed input/failure digest, checkpoint digest, decision, reason, expiry,
+and a verifier-generated nonce with an operator key unavailable to the run. Jason pins the signer key
+in an attended journal arm record that the run also cannot modify. The journal authenticates the
+attended writer and returns an immutable decision ID. Executor and doctor exact-fetch the journal row,
+verify signature, signer, expiry, nonce, and every binding, then treat the checkpoint's ID/digest only
+as a run-authored observation. Mail text, checkpoint contents, or a copied/replayed decision can never
+substitute for that artifact. If the current surface cannot enforce the separate principals and
+append-only journal, River's separately reviewed provider-neutral prerequisite must provide it before
+N1; no local convention is an acceptable substitute.
+
+N1 must either prove stronger existing surfaces or independently gate minimal provider-neutral
+`CONTINUATION_CLAIM_V1` and operator-decision journal surfaces before any Codex implementation. The
+claim surface must atomically return a unique holder token and monotonic fence, use a 180-second lease,
+renew only for the same holder every
 45 seconds, reject older fences after takeover, and permit at most one active claim for `(persona,
 message_id)`. The work slice remains 45 seconds; a renewal failure stops before further action. A
 claim becomes stale only after server time passes `lease_expires_at`; expiry permits a new discovery
@@ -191,8 +208,8 @@ Jason owns the work envelope by writing it in the current request or current-sta
 row arrives; mail cannot create or widen it. Before any mutation, the holder atomically writes an
 intent containing message ID, fence, native run ID, action kind/target, input digest, idempotency key,
 expected pre-state digest, and reconciliation method. The mutation must either accept that
-idempotency/fence or produce independently readable
-before/after evidence. If neither is possible, the run takes the `REQUIRES_USER` terminal path below
+idempotency/fence or produce independently readable before/after evidence. If neither is possible,
+the run takes the `REQUIRES_USER` terminal path below
 and does not perform it.
 
 After action, the holder records the provider receipt/output digest, exact-refetches `M`, and commits
@@ -206,19 +223,19 @@ release.
 
 `REQUIRES_USER(M)` is a fenced terminal disposition, not a retry state. Whether caused by an unsafe
 adapter or the ten-slice/ten-minute bound, it records reason, progress, intent/receipt evidence, and
-operator choices; atomically commits `completed_id=M`; then releases the exact claim. It blocks all
+available operator choices; atomically commits `completed_id=M`; then releases the exact claim. It blocks all
 later automatic work and ARMED health without rediscovering or re-executing `M`. An attended operator
-escapes it by writing one signed resolution: accept/decline the disposition, repair the external state,
-or narrow/extend the pre-registered envelope and resend as a new higher-ID row. Clearing the health
-block requires that resolution and never reopens `M`.
+escapes it only with one valid out-of-band operator-decision journal row: accept/decline the
+disposition, attest repaired external state, or narrow/extend the pre-registered envelope and resend
+as a new higher-ID row. Clearing the health block requires that exact artifact and never reopens `M`.
 
 `AMBIGUOUS_ACTION(M)` means crash reconciliation cannot prove whether the recorded intent produced an
 external effect. It records the contradictory/missing evidence, leaves `completed_id` below `M`,
 releases the exact claim, and blocks discovery, later work, and ARMED health without attempting the
 effect again. An attended operator must supply independently readable evidence that lets the fenced
 checkpoint, under a fresh higher holder/fence for `M`, either commit `M` once or exact-quarantine `M`
-with a signed decision; only then may the block clear. Quarantine and `REQUIRES_USER` release their
-exact claim after their fenced commit.
+with a valid exact-bound operator-decision artifact; only then may the block clear. Quarantine and
+`REQUIRES_USER` release their exact claim after their fenced commit.
 
 Any release failure enters `CLAIM_RELEASE_FAILED(M)`. It preserves the already-chosen
 `completed_id` effect, performs only idempotent release/server-absence checks, and remains doctor-RED.
@@ -236,17 +253,19 @@ There is no assumed programmatic Scheduled management API.
   task/run evidence discovered by N0. Re-arm for the same identity is a documented idempotent UI
   procedure; another chat requires cutover first.
 - **Doctor:** a read-only verifier outside the scheduled run reads the recorded rollout/run artifact,
-  checkpoint/claim state, and hosted heartbeat. It reports ARMED only while successful native runs
-  continue within two cadences and every identity field matches. It reports `DRAINING_BACKLOG`,
+  checkpoint/claim state, operator-decision journal, and hosted heartbeat. For a one-minute cadence,
+  “recent” means server age at most 135 seconds (two cadences plus 15 seconds measured skew); excess
+  skew is RED. It reports ARMED only while successful native runs continue within two cadences and
+  every identity field matches. It reports `DRAINING_BACKLOG`,
   `BLOCKED_ROW(id)`, `REQUIRES_USER(id)`, `AMBIGUOUS_ACTION(id)`, `CLAIM_RELEASE_FAILED(id)`,
   `LEGACY_CONSUMER`, `STALE`, or `INACTIVE` explicitly.
   It never claims that a UI task exists/enabled from self-report alone.
 - **Blocked-row escape:** automatic skipping is forbidden. An attended operator may repair/resend the
-  row or exact-quarantine one ID with reason and signed operator decision. Quarantine writes a durable
-  tombstone/disposition, preserves body digest/provenance where available, advances only that exact
-  ID under the claim fence, and releases the exact claim. The signed decision is the recovery
-  confirmation; successful commit/release clears that exact block. Release failure follows the path
-  above.
+  row or exact-quarantine one ID with reason and a valid exact-bound operator-decision artifact.
+  Quarantine writes a durable tombstone/disposition, preserves body digest/provenance where available,
+  advances only that exact ID under the claim fence, and releases the exact claim. The validated
+  journal decision is the recovery confirmation; successful commit/release clears that exact block.
+  Release failure follows the path above.
 - **Pause/uninstall:** the attended operator disables or deletes the exact task in **Scheduled** and
   verifies no run for two cadences. Uninstall then removes only manifest-owned checkpoint artifacts
   after identity/ownership verification. No hooks, LaunchAgents, ordinary auth/config edits, or UI
@@ -283,17 +302,25 @@ The rollback never runs two consumers concurrently and never treats `mark_read` 
 **AUTHORITY:** Two consecutive Assay-CLEAN reviews of this exact plan digest open N0a/N0b only.
 GREEN N0 then authorizes disposable test-persona probes of the current N1-N3 surfaces, but no
 Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate
-provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews
-before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3
-are GREEN and Jason explicitly accepts N3.
+provider-neutral claim/operator-decision API plan owned by River must receive two consecutive
+Assay-CLEAN reviews before any such API code is written. An installable Codex provider remains
+forbidden until N0-N3 are GREEN and Jason explicitly accepts N3.
 
 Disposable probes use a dedicated test persona, never persona `codex`, except N0a's explicitly
 read-only `mark_read=false` capability peek.
 
 ### N0a — native same-chat, collision, and unattended capability
 
+Before task creation, the outside verifier snapshots the app-owned rollout set, generates a 128-bit
+nonce, and Jason submits that nonce in one attended marker turn in the target chat. Exactly one rollout
+created/advanced after the snapshot must contain that marker turn and a first
+`session_meta.payload.id`; that ID becomes pinned `T`. Zero/multiple matches, run-generated nonce,
+newest/mtime selection, or visual/transcript similarity is RED. Marker evidence acquires `T` only and
+never proves a background run's identity.
+
 With a disposable schedule and no Kijito controller code, record `T` and `E`; create a one-minute
-task inside `T` that returns a unique nonce and performs a read-only proof of `E`. An independent
+task inside `T` that returns a second verifier-generated 128-bit nonce pre-registered with task ID and
+prompt digest before scheduling, and performs a read-only proof of `E`. An independent
 verifier outside the run must read the app-owned rollout plus Scheduled run record and match `T`,
 turn/run ID, nonce, cwd/project/worktree, model, sandbox, approval and permission profile. Repeat:
 
@@ -317,8 +344,9 @@ API, or UI automation is RED.
 Through documented ChatGPT/desktop controls, create, inspect, pause, resume, and delete the disposable
 task. Independently capture which stable IDs/run records/rollout artifacts are readable, cadence and
 quota/rate/expiry limits, and what happens after app exit, sleep, lock, project removal, and permission
-change. Prove doctor derives its state only from those artifacts plus hosted heartbeat and turns RED
-within two cadences after pause/delete/drift. If management requires unsupported automation or doctor
+change. Measure server/host clock skew and require it not exceed 15 seconds. Prove doctor derives its
+state only from those artifacts plus hosted heartbeat and turns RED within two cadences after
+pause/delete/drift. If management requires unsupported automation or doctor
 cannot distinguish enabled from stale/disabled, N0b is RED.
 
 ### N1 — fenced checkpoint transaction
@@ -329,19 +357,24 @@ holder alive past 60 seconds and two schedule cadences; a contender cannot steal
 prove takeover only after the 180-second server deadline with a larger fence. The old holder then
 cannot write intent, renew, commit, or acknowledge. Crash before intent, after intent, after external
 effect, and after commit; each reconciles without duplicate side effect. A non-idempotent adapter
-without intent+receipt reconciliation is refused. If this requires `CONTINUATION_CLAIM_V1`, its API,
+without intent+receipt reconciliation is refused. If this requires either new surface, its API,
 threat model, tests, and independent review are a separate provider-neutral prerequisite.
 Force both causes of `REQUIRES_USER`, an irresolvable receipt into `AMBIGUOUS_ACTION`, and release
 failure after success/terminal/quarantine commits. Assert each state's checkpoint and `completed_id`
 effect, doctor/ARMED block, no-repeat behavior, and automatic or attended escape.
+Attempt scheduled-run writes to every operator journal/control-plane field and require structural
+denial. Inject forged, copied, expired, replayed, wrong-chat/message/body/checkpoint, and valid
+operator-decision artifacts; only the exact live journal row may authorize one escape.
 
 ### N2 — exact durable-row retrieval and blocked recovery
 
 Synthetic account-owned mail proves unread, already-read, older-window, ID-gap, and content-budget
 rows are found; another consumer marks rows read during every paging phase; arrival during paging is
 caught by final repoll; exact fetch returns the intended ID; oversized/truncated/missing/provenance-bad
-content blocks discovery and makes doctor RED; no later row advances; repair and operator-quarantine
-each recover only the exact blocked ID; checkpoint ack and courtesy `mark_read` affect only the intended
+content blocks discovery and makes doctor RED; no later row advances. Corrupt derived scan state
+blocks at `completed_id+1`; a valid operator-decision artifact may discard only scan cursor/ranges/
+pending/byte fields and force a full newest-to-completed rescan while leaving `completed_id`
+unchanged. Repair and operator-quarantine each recover only the exact blocked ID; checkpoint ack and courtesy `mark_read` affect only the intended
 row. Exercise the 15-second/request/ID/byte bounds, require persisted `DRAINING_BACKLOG`, resume from
 the saved cursor across ticks, and drain the entire backlog once without false empty or duplicate work.
 
@@ -360,23 +393,29 @@ run start; any compaction that loses pointer/claim state; or any permission/tool
 may change only in a new plan digest before the run, never after seeing results.
 
 Jason receives the measured daily projection, visible-noise/context cost, exact permission profile,
-prompt-injection residual risk, polling semantics, and mitigations. He must explicitly accept them
-before implementation. Silence is not approval.
+prompt-injection residual risk, polling semantics, and mitigations. The disclosure states that any
+single inbound row can terminally halt the lane—through invalid/provenance-bad content or the work
+bound—until Jason supplies an out-of-band attended decision. These bounds are not runtime-adjustable;
+changing them requires a new reviewed plan digest before measurement. He must explicitly accept all
+of this before implementation. Silence is not approval.
 
 ## 9. Future implementation gates
 
 These specify QA; they are not implementation permission.
 
 - **G1 protocol:** property tests for paging/bounds, exact fetch, fenced lease renewal/takeover, stale
-  writer rejection, intent/effect/commit crash reconciliation, ordering, duplicates, hostile content,
-  bad provenance, clock skew, blocked health, and migration fence. Each high-value property has a
+  writer rejection, intent/effect/commit crash reconciliation, operator-journal signature/replay/write
+  partition, ordering, duplicates, hostile content, bad provenance, clock skew, blocked health, and
+  migration fence. Each high-value property has a
   mutation failing at its unique named assertion.
 - **G2 same chat:** no-mail read-only; normal/already-read mail handled once in `T`; native rollout
   identity independently verified; manual-turn input queues without steer; overlaps suppress; sleep/
   restart drains backlog; compaction reloads pointer; no authorized work yields explicit disposition.
 - **G3 security:** injection, role impersonation, exfiltration, scope expansion, destructive requests,
   sender spoofing, oversized text, and malformed Unicode/JSON cannot change prompt/instruction role,
-  tool allowlist, sandbox, project, chat target, claim fence, intent, or ack order.
+  tool allowlist, sandbox, project, chat target, claim fence, intent, operator-decision ID/digest, or
+  ack order. No operator-authored checkpoint/control-plane field is writable by the scheduled run;
+  this write partition is a property test over the schema, not a field enumeration.
 - **G4 lifecycle:** attended idempotent arm, wrong-chat refusal, pause/resume, ownership-bound uninstall,
   app-down/disabled/outage/blocked health, stale-claim recovery, cutover/rollback, hard double-consumer
   fence, and zero hooks/LaunchAgents.

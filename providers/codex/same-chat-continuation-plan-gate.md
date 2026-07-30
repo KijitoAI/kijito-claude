@@ -2,7 +2,7 @@
 
 Plan: [`same-chat-continuation-plan.md`](same-chat-continuation-plan.md)
 
-Plan SHA-256: `7e9b19a1678878f847075f8bd5470b75f0741d9168b166bf9a3f2f90b8faede9`
+Plan SHA-256: `3d11d5e0defd248e3a26d12ddb073fdd337acf8f38df785a204fbd2e0f22afac`
 
 Scope: presence-only author lint. It constructs no behavioral specimen and contributes **zero** to
 the required Assay reviews. No capability probe, provider/server implementation, installation,
@@ -34,6 +34,21 @@ migration, or production change is represented here.
 - Review: `QA/reviews/PR6-same-chat-plan-round3-bdf4701.md` at `59b22d5`
 - Calibration: every round-2 load-bearing item closed REAL; the remaining `REQUIRES_USER` lifecycle
   defect entered through the new multi-slice bound.
+
+### Round 4
+
+- Frozen commit: `5117d7286054980c3b77a50307359b2fccfd6f8a`
+- Plan digest: `7e9b19a1678878f847075f8bd5470b75f0741d9168b166bf9a3f2f90b8faede9`
+- Initial verdict: **CLEAN 1/2**, later superseded by round 5's wrong-action finding on the same bytes
+- Review: `QA/reviews/PR6-same-chat-plan-round4-5117d72.md` at `2776eb0`
+
+### Round 5
+
+- Frozen commit/digest: exact unchanged round-4 specimen above
+- Verdict: **NOT CLEAN — count reset to 0/2**
+- Review: `QA/reviews/PR6-same-chat-plan-round5-5117d72.md` at `7373478`
+- Different-angle result: identity, drain, liveness, fence, and general authority design passed; an
+  unpartitioned operator-resolution field allowed hostile mail to forge quarantine authority.
 
 This revision changes the plan digest; no review count carries forward.
 
@@ -91,8 +106,8 @@ in git history. The superseded provenance digest was
 
 | Round-3 item | Closure in this digest |
 |---|---|
-| N-1 `REQUIRES_USER` lifecycle | It is a fenced terminal disposition: commits `completed_id=M`, releases the claim, blocks ARMED/later work, never rediscovers `M`, and clears only through a signed attended resolution. |
-| N-2 undefined `AMBIGUOUS_ACTION` | Defined as irreconcilable intent/effect evidence; leaves `completed_id` below `M`, releases, blocks discovery/ARMED without replay, and requires evidence-backed commit or signed exact quarantine. |
+| N-1 `REQUIRES_USER` lifecycle | It is a fenced terminal disposition: commits `completed_id=M`, releases the claim, blocks ARMED/later work, never rediscovers `M`, and clears only through an attended resolution (round 5 later found its authority undefined). |
+| N-2 undefined `AMBIGUOUS_ACTION` | Defined as irreconcilable intent/effect evidence; leaves `completed_id` below `M`, releases, blocks discovery/ARMED without replay, and requires evidence-backed commit or attended exact quarantine (authority superseded below). |
 | N-3 terminal claim release | Success, `REQUIRES_USER`, ambiguity, `DEFERRED`, and quarantine all release; any failure enters bounded/escapable `CLAIM_RELEASE_FAILED(M)` without repeated action. |
 | N-4 release-failure escape | Doctor stays RED while idempotent release/absence checks run; server-proven expiry/absence or attended exact-holder release clears it. |
 | N-5 dispatcher authorization surface | Root `install.sh` comments label the Codex notifier withdrawn and direct users to skills-only. |
@@ -107,21 +122,43 @@ this record. N0a labels its 75-second barrier synthetic and exempt from the prod
 | Runtime state/bound | Doctor | Outcome 8 | Checkpoint | Probe | `completed_id` effect and escape |
 |---|---|---|---|---|---|
 | `DRAINING_BACKLOG` | enumerated | blocks ARMED | scan cursor/ranges/bytes | N2 | unchanged; bounded next-tick resume/drain |
-| `BLOCKED_ROW(id)` | enumerated | blocks ARMED | health reason + exact ID | N2 | below ID; repair or signed exact quarantine |
-| ten-slice/ten-minute bound → `REQUIRES_USER(id)` | enumerated | blocks ARMED | slices/deadline/reason/resolution | N1 | commits ID once; signed attended resolution, never reopen ID |
-| `AMBIGUOUS_ACTION(id)` | enumerated | blocks ARMED | intent + ambiguity evidence/resolution | N1 | below ID; evidence-backed commit or signed quarantine |
+| `BLOCKED_ROW(id)` | enumerated | blocks ARMED | health reason + exact ID | N2 | below ID; repair or exact-bound journal quarantine |
+| ten-slice/ten-minute bound → `REQUIRES_USER(id)` | enumerated | blocks ARMED | slices/deadline/reason/resolution | N1 | commits ID once; attended journal resolution, never reopen ID |
+| `AMBIGUOUS_ACTION(id)` | enumerated | blocks ARMED | intent + ambiguity evidence/resolution | N1 | below ID; evidence-backed commit or journal-authorized quarantine |
 | `CLAIM_RELEASE_FAILED(id)` | enumerated | blocks ARMED | holder/lease/health reason | N1 | preserves prior choice; proven expiry/absence or attended exact release |
 
 Every row has all five entries. This table is static author lint, not behavioral proof.
+
+## Round-6 hostile-mail closure matrix
+
+| Round-5 item | Closure in this digest |
+|---|---|
+| N4-1 operator-authority forgery | Operator authority is an out-of-band append-only journal under a separate attended principal. The scheduled run cannot write any operator-authored checkpoint/control-plane field; its checkpoint stores only a validated decision observation. Canonical signatures bind persona/chat/message/observed-input/checkpoint/decision/expiry/nonce, and G3 tests the write partition as a schema property. |
+| N4-2 terminal-halt disclosure | N3 tells Jason that one bad/provenance-invalid or work-bound row can halt the lane until his attended decision; the bounds are not runtime-adjustable. |
+| N4-3 POSIX marker labels | Shell helpers execute in subshell functions, preventing helper variables from clobbering the caller's marker; expected PLAN/GATE labels reproduce under POSIX `sh`. |
+| A1 acquisition of `T` | A snapshot plus verifier-generated 128-bit attended marker nonce must identify exactly one app-owned rollout/session ID before scheduling; ambiguity and newest/mtime heuristics are RED. |
+| A2 nonce provenance | The run nonce is verifier-generated and pre-registered with task ID/prompt digest; run-generated nonce is RED. |
+| A3 corrupt scan cursor | A valid operator decision may delete derived scan cursor/range/pending/byte fields only, keep `completed_id`, and force a full newest-to-checkpoint rescan. |
+| A4 heartbeat recency | For the one-minute cadence, server age is at most 135 seconds (two cadences + measured 15-second skew); excess skew is RED. |
+
+### Operator-authority property trace
+
+| Property | Plan evidence | Probe |
+|---|---|---|
+| no scheduled-run write to operator authority | checkpoint/journal write partition in section 5 | N1 attempts every journal/control-plane write and requires structural denial |
+| out-of-band attended artifact | canonical signed `CODEX_CONTINUATION_OPERATOR_DECISION_V1` journal row | N1 exact-fetch/signature/principal/binding checks |
+| hostile mail cannot substitute authority | mail/checkpoint/copied/replayed artifacts explicitly rejected | N1 forged/replayed/wrong-binding matrix + G3 schema property |
+| doctor does not trust run self-report | doctor reads the operator journal directly | N0b/N1 external verification |
+| quarantine cannot skip on attacker text | exact-bound valid journal row required before fenced advance | N1 invalid-vs-valid escape probe |
 
 ## Canonical post-review authority
 
 **AUTHORITY:** Two consecutive Assay-CLEAN reviews of this exact plan digest open N0a/N0b only.
 GREEN N0 then authorizes disposable test-persona probes of the current N1-N3 surfaces, but no
 Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate
-provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews
-before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3
-are GREEN and Jason explicitly accepts N3.
+provider-neutral claim/operator-decision API plan owned by River must receive two consecutive
+Assay-CLEAN reviews before any such API code is written. An installable Codex provider remains
+forbidden until N0-N3 are GREEN and Jason explicitly accepts N3.
 
 ## Traceability lint
 
@@ -160,11 +197,12 @@ execute the mechanism, or review semantics.
 
 ## Author lint result (non-counting)
 
-- Timestamp: `2026-07-30T20:02:51Z`
-- Plan digest: `7e9b19a1678878f847075f8bd5470b75f0741d9168b166bf9a3f2f90b8faede9`
+- Timestamp: `2026-07-30T20:42:40Z`
+- Plan digest: `3d11d5e0defd248e3a26d12ddb073fdd337acf8f38df785a204fbd2e0f22afac`
 - False-pass text markers: **10/10 present**
-- Independent finding traces: **20/20 present (L1-L10, LB-1..LB-7, N-1..N-3)**
+- Independent finding traces: **21/21 present (L1-L10, LB-1..LB-7, N-1..N-3, N4-1)**
 - Runtime-state five-point rows: **5/5 complete**
+- Operator-authority property rows: **5/5 complete**
 - Supersession surfaces: **provider/root README, provider/root installer, parity plan, PR disposition present**
 - Provider conformance: **59/59 GREEN**
 - Controller/release regression suites: **17/17 GREEN**
@@ -191,6 +229,6 @@ checks only; they do not reproduce an independent semantic plan review.
 ## Next gate
 
 Freeze/push one consolidated plan-and-supersession-fence revision, wait for CI, then send Assay the
-exact Git-returned full commit SHA and plan digest for round 4. The independent count remains 0/2 until
+exact Git-returned full commit SHA and plan digest for round 6. The independent count remains 0/2 until
 a CLEAN review; two consecutive CLEAN reviews must use one exact unchanged digest. The canonical
 AUTHORITY paragraph above is the only post-review permission statement.

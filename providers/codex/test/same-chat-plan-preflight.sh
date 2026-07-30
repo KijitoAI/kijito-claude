@@ -11,7 +11,7 @@ installer="$root/install.mjs"
 parity_plan="$root/codex-kijito-parity-plan.md"
 dispatcher="$repo/install.sh"
 
-must_contain() {
+must_contain() (
   file=$1
   needle=$2
   marker=$3
@@ -24,9 +24,9 @@ must_contain() {
     exit 1
   }
   printf '%s\n' "$marker"
-}
+)
 
-must_not_contain() {
+must_not_contain() (
   file=$1
   needle=$2
   marker=$3
@@ -40,9 +40,9 @@ must_not_contain() {
     printf 'RED %s forbidden: %s\n' "$marker" "$needle" >&2
     exit 1
   fi
-}
+)
 
-must_count() {
+must_count() (
   file=$1
   needle=$2
   expected=$3
@@ -59,14 +59,14 @@ must_count() {
     exit 1
   fi
   printf '%s\n' "$marker"
-}
+)
 
-must_authority_line() {
+must_authority_line() (
   line=$1
   marker=$2
   must_count "$plan" "$line" 2 "${marker}_PLAN"
   must_count "$gate" "$line" 1 "${marker}_GATE"
-}
+)
 
 # Each marker names a false-pass class in the gate record and is emitted only when the corresponding
 # rejection text is present. This is static presence lint; it does not construct a specimen.
@@ -100,6 +100,7 @@ done
 for finding in N-1 N-2 N-3; do
   must_contain "$gate" "| $finding " "ROUND3_${finding}_TRACED"
 done
+must_contain "$gate" "| N4-1 " "ROUND5_N4-1_TRACED"
 
 must_contain "$readme" "Do not install, upgrade, migrate" "WITHDRAWN_README_FENCE_PRESENT"
 must_contain "$repo_readme" 'Codex dedicated-thread provider withdrawn' \
@@ -121,6 +122,18 @@ must_contain "$plan" '`AMBIGUOUS_ACTION(M)` means crash reconciliation cannot pr
   "AMBIGUOUS_ACTION_DEFINED"
 must_contain "$plan" 'For every runtime state or production execution bound added by a revision' \
   "FIVE_POINT_STATE_CHECK_PRESENT"
+must_contain "$plan" 'No operator-authored checkpoint or control-plane field may be writable by a scheduled run.' \
+  "OPERATOR_WRITE_PARTITION_PRESENT"
+must_contain "$plan" '`CODEX_CONTINUATION_OPERATOR_DECISION_V1` journal' \
+  "OPERATOR_JOURNAL_PRESENT"
+must_contain "$plan" 'Exactly one rollout' \
+  "TARGET_CHAT_ACQUISITION_PRESENT"
+must_contain "$plan" 'Corrupt derived scan state' \
+  "CORRUPT_SCAN_REPAIR_PRESENT"
+must_contain "$plan" 'server age at most 135 seconds' \
+  "HEARTBEAT_BOUND_PRESENT"
+must_contain "$plan" 'single inbound row can terminally halt the lane' \
+  "TERMINAL_HALT_DISCLOSURE_PRESENT"
 must_contain "$gate" '| `DRAINING_BACKLOG` | enumerated | blocks ARMED |' \
   "STATE_DRAINING_FIVE_POINT_TRACED"
 must_contain "$gate" '| `BLOCKED_ROW(id)` | enumerated | blocks ARMED |' \
@@ -137,11 +150,11 @@ must_authority_line "GREEN N0 then authorizes disposable test-persona probes of 
   "CANONICAL_AUTHORITY_LINE2"
 must_authority_line "Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate" \
   "CANONICAL_AUTHORITY_LINE3"
-must_authority_line "provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews" \
+must_authority_line "provider-neutral claim/operator-decision API plan owned by River must receive two consecutive" \
   "CANONICAL_AUTHORITY_LINE4"
-must_authority_line "before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3" \
+must_authority_line "Assay-CLEAN reviews before any such API code is written. An installable Codex provider remains" \
   "CANONICAL_AUTHORITY_LINE5"
-must_authority_line "are GREEN and Jason explicitly accepts N3." \
+must_authority_line "forbidden until N0-N3 are GREEN and Jason explicitly accepts N3." \
   "CANONICAL_AUTHORITY_LINE6"
 must_not_contain "$gate" "INTERNAL GOLDEN" "NO_SELF_ATTESTED_GOLDEN"
 must_not_contain "$plan" "Only Assay CLEAN opens N0" "NO_SINGLE_CLEAN_GATE"
