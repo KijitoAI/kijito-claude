@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { defaultConsumerLockFile } from "../controller.mjs";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-c3-live."));
 const codexHome = path.join(root, "codex-home");
 const workspace = path.join(root, "empty-workspace");
 const runtime = path.join(root, "runtime");
+const eventsFile = path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson");
 fs.chmodSync(root, 0o700);
 for (const directory of [codexHome, workspace, runtime]) fs.mkdirSync(directory, { mode: 0o700 });
 
@@ -59,7 +61,7 @@ console.log(JSON.stringify({
   workspace,
   runtime,
   stateFile: path.join(runtime, "state.json"),
-  lockFile: path.join(runtime, "consumer.lock"),
-  eventsFile: path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson"),
+  lockFile: defaultConsumerLockFile(eventsFile),
+  eventsFile,
   tokenFile: path.join(os.homedir(), ".claude", ".kijito_api_token"),
 }, null, 2));

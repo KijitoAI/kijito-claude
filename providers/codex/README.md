@@ -91,6 +91,10 @@ The shared monitor directory that owns the global lock may be `0755`, matching t
 production layout. It must be a real directory owned by the current uid and may not be writable by
 group or other users (`0775`/`0777` are rejected). The event stream and lock files themselves remain
 private `0600`; the dedicated Codex home, workspace, runtime, and install directories remain `0700`.
+Direct controller invocations and the live-gate helper default to that same stream-scoped lock; a
+caller cannot substitute a per-runtime lock while consuming the shared production event stream.
+The installer and controller accept an explicit lock option only when it resolves to the exact
+deterministic lock beside the selected event file, and `doctor` rejects a manifest that diverges.
 
 Uninstall is manifest-bound and confirm-required:
 

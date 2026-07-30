@@ -71,7 +71,8 @@ function readRuntimeState(manifest) {
 }
 
 function lockFileFor(manifest) {
-  return manifest.paths.lockFile ?? path.join(manifest.paths.runtime, "consumer.lock");
+  return manifest.paths.lockFile
+    ?? (manifest.paths.eventsFile ? path.join(path.dirname(manifest.paths.eventsFile), "consumer.codex.lock") : path.join(manifest.paths.runtime, "consumer.lock"));
 }
 
 function freshHeartbeat(state, pid, now = Date.now()) {
@@ -164,6 +165,8 @@ export function assertArmedHealth(wake) {
 }
 
 export function doctor(manifest) {
+  const expectedLockFile = path.join(path.dirname(manifest.paths.eventsFile), "consumer.codex.lock");
+  if (lockFileFor(manifest) !== expectedLockFile) throw new Error("manifest consumer lock is not stream-scoped beside the event file");
   checkRealPrivateDirectory(installRoot, "install root");
   checkRealPrivateDirectory(manifest.paths.codexHome, "dedicated Codex home");
   checkRealPrivateDirectory(manifest.paths.workspace, "dedicated workspace");

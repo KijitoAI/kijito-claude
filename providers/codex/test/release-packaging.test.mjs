@@ -118,6 +118,8 @@ function installArgs(f) {
 test("release install, doctor, duplicate refusal, and manifest-bound uninstall", () => {
   const f = fixture();
   try {
+    const customLock = run([...installArgs(f), "--lock-file", path.join(f.root, "custom.lock")], 1);
+    assert.match(customLock.stderr, /stream-scoped Codex lock/);
     const ordinaryBefore = fs.readFileSync(f.config, "utf8");
     const authBefore = fs.readFileSync(f.auth, "utf8");
     const installed = JSON.parse(run(installArgs(f)).stdout);
@@ -135,6 +137,12 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    manifest.paths.lockFile = path.join(manifest.paths.runtime, "consumer.lock");
+    fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    const unscopedManifest = run([f.launcher, "doctor"], 1);
+    assert.match(unscopedManifest.stderr, /consumer lock is not stream-scoped/);
+    manifest.paths.lockFile = path.join(path.dirname(f.events), "consumer.codex.lock");
+    fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o775);
     const writableLockParent = run([f.launcher, "doctor"], 1);
     assert.match(writableLockParent.stderr, /global consumer-lock directory is not a user-owned, non-group\/other-writable real directory/);

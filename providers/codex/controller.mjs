@@ -31,6 +31,7 @@ import {
   MAX_READ_BYTES,
   WAKE_PREFIX,
   acquireLock as coreAcquireLock,
+  defaultConsumerLockFile as coreDefaultConsumerLockFile,
   fixedWakeText as coreFixedWakeText,
   initialState as coreInitialState,
   loadState as coreLoadState,
@@ -51,6 +52,7 @@ export const fixedWakeText = (batch, persona = PERSONA) => coreFixedWakeText(bat
 export const initialState = (persona = PERSONA) => coreInitialState(persona);
 export const loadState = (file, persona = PERSONA) => coreLoadState(file, persona);
 export const acquireLock = (file, persona = PERSONA) => coreAcquireLock(file, persona);
+export const defaultConsumerLockFile = (eventsFile, persona = PERSONA) => coreDefaultConsumerLockFile(eventsFile, persona);
 
 // Codex-specific, and the reason it did NOT move into the shared core: it asserts the shape of a
 // dedicated CODEX_HOME — a private directory holding exactly one regular `config.toml` and one
@@ -736,7 +738,7 @@ function readPrivateTokenFile(file) {
   return token;
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 2) {
     if (!argv[index]?.startsWith("--") || argv[index + 1] === undefined) throw new Error(`invalid argument ${argv[index] ?? ""}`);
@@ -746,13 +748,18 @@ function parseArgs(argv) {
   if (!rawCodexHome) throw new Error("--codex-home is required");
   const codexHome = path.resolve(rawCodexHome);
   const runtime = path.resolve(values.runtime ?? path.join(codexHome, "runtime"));
+  const eventsFile = path.resolve(values.events ?? path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson"));
+  const lockFile = defaultConsumerLockFile(eventsFile);
+  if (values.lock !== undefined && path.resolve(values.lock) !== lockFile) {
+    throw new Error("--lock must equal the stream-scoped persona lock beside --events");
+  }
   const tokenFile = path.resolve(values["token-file"] ?? path.join(os.homedir(), ".claude", ".kijito_api_token"));
   return {
     codexHome,
     workspace: path.resolve(values.workspace ?? path.join(codexHome, "workspace")),
-    eventsFile: path.resolve(values.events ?? path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson")),
+    eventsFile,
     stateFile: path.resolve(values.state ?? path.join(runtime, "state.json")),
-    lockFile: path.resolve(values.lock ?? path.join(runtime, "consumer.lock")),
+    lockFile,
     token: readPrivateTokenFile(tokenFile),
     codexBin: values.codex ?? "codex",
     codexArgs: [],

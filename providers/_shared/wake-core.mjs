@@ -45,6 +45,13 @@ function requirePersona(persona) {
   return persona;
 }
 
+export function defaultConsumerLockFile(eventsFile, persona) {
+  requirePersona(persona);
+  if (typeof eventsFile !== "string" || eventsFile.length === 0) throw new Error("wake-core: events file is required");
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(persona)) throw new Error("wake-core: persona must be a filename-safe name");
+  return path.join(path.dirname(path.resolve(eventsFile)), `consumer.${persona}.lock`);
+}
+
 export function parseEventLine(line, persona) {
   requirePersona(persona);
   const bytes = Buffer.isBuffer(line) ? line : Buffer.from(String(line));

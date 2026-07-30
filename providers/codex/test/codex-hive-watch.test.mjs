@@ -9,9 +9,11 @@ import {
   MAX_LINE_BYTES,
   WAKE_PREFIX,
   acquireLock,
+  defaultConsumerLockFile,
   fixedWakeText,
   initialState,
   loadState,
+  parseArgs,
   parseEventLine,
   releaseLock,
   saveState,
@@ -128,6 +130,30 @@ test("state is atomic and lock is single-owner", () => {
     assert.ok(fs.existsSync(fixture.lockFile));
     releaseLock(lock);
     assert.equal(fs.existsSync(fixture.lockFile), false);
+  } finally { cleanup(fixture); }
+});
+
+test("direct controller defaults to the stream-scoped persona lock", () => {
+  const fixture = tempFixture();
+  try {
+    const tokenFile = path.join(fixture.root, "token");
+    fs.writeFileSync(tokenFile, `kjt_${"x".repeat(32)}\n`, { mode: 0o600 });
+    const parsed = parseArgs([
+      "--codex-home", fixture.codexHome,
+      "--workspace", fixture.workspace,
+      "--runtime", fixture.runtime,
+      "--events", fixture.eventsFile,
+      "--token-file", tokenFile,
+    ]);
+    assert.equal(parsed.lockFile, defaultConsumerLockFile(fixture.eventsFile));
+    assert.notEqual(parsed.lockFile, path.join(fixture.runtime, "consumer.lock"));
+    assert.throws(() => defaultConsumerLockFile(fixture.eventsFile, "../codex"), /filename-safe/);
+    assert.throws(() => parseArgs([
+      "--codex-home", fixture.codexHome,
+      "--events", fixture.eventsFile,
+      "--lock", path.join(fixture.runtime, "consumer.lock"),
+      "--token-file", tokenFile,
+    ]), /stream-scoped persona lock/);
   } finally { cleanup(fixture); }
 });
 
@@ -550,4 +576,10 @@ test("release source contains no lifecycle or current-thread injection mechanism
       assert.equal(source.includes(forbidden), false, `${label}: forbidden token ${forbidden}`);
     assert.equal(source.includes("...process.env"), false, `${label}: app-server must not inherit arbitrary parent secrets`);
   }
+});
+
+test("live-gate helper delegates to the stream-scoped default lock", () => {
+  const source = fs.readFileSync(new URL("./prepare-live-gate.mjs", import.meta.url), "utf8");
+  assert.match(source, /lockFile:\s*defaultConsumerLockFile\(eventsFile\)/);
+  assert.doesNotMatch(source, /lockFile:\s*path\.join\(runtime,\s*["']consumer\.lock["']\)/);
 });

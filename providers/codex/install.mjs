@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultConsumerLockFile } from "../_shared/wake-core.mjs";
 
 // This installer used to live at <root>/release/install.mjs, so its source root was one level up.
 // Folded into kijito-claude it sits AT the provider root (providers/codex/), so `here` IS the source
@@ -36,6 +37,10 @@ function parseArgs(argv) {
   const home = os.homedir();
   const expand = (value) => path.resolve(value.replace(/^~(?=\/|$)/, home));
   const eventsFile = expand(values["events-file"] ?? path.join(home, ".cache", "kijito-inbox-monitor", "events.codex.ndjson"));
+  const lockFile = defaultConsumerLockFile(eventsFile, "codex");
+  if (values["lock-file"] !== undefined && expand(values["lock-file"]) !== lockFile) {
+    throw new Error("--lock-file must equal the stream-scoped Codex lock beside --events-file");
+  }
   return {
     sourceRoot: expand(values["source-root"] ?? sourceRootDefault),
     installRoot: expand(values["install-root"] ?? path.join(home, ".local", "share", "codex-kijito-hive")),
@@ -44,7 +49,7 @@ function parseArgs(argv) {
     ordinaryConfig: expand(values["ordinary-config"] ?? path.join(home, ".codex", "config.toml")),
     tokenFile: expand(values["token-file"] ?? path.join(home, ".claude", ".kijito_api_token")),
     eventsFile,
-    lockFile: expand(values["lock-file"] ?? path.join(path.dirname(eventsFile), "consumer.codex.lock")),
+    lockFile,
     codexBin: expand(values["codex-bin"] ?? path.join(home, ".local", "bin", "codex")),
     nodeBin: expand(values["node-bin"] ?? process.execPath),
     skillsRoot: expand(values["skills-root"] ?? path.join(home, ".codex", "skills")),
