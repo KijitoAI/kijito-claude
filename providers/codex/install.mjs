@@ -197,7 +197,7 @@ function install(options) {
   // The wake core is executable code inside a hash-gated install, so it is gated exactly like the
   // controller it was extracted from. Splitting a gated file into gated + ungated halves would have
   // left parseEventLine and fixedWakeText -- the event validator and the injection fence -- editable
-  // with `doctor` still reporting GREEN.
+  // while the integrity hashes still passed.
   if (sha256(wakeCoreSource) !== release.artifacts.wakeCoreSha256) throw new Error("wake core differs from gated hash");
   // The parity plan is RECORDED, not gated. It used to be hash-gated here, from a path OUTSIDE the
   // installable directory (`<sourceRoot>/../codex-kijito-parity-plan.md`), which meant every install

@@ -22,7 +22,7 @@ thread, delivering the wake turn — and binds the persona the shared core refus
 
 Both files are hash-gated at install and hash-checked by `doctor`. That is deliberate rather than
 incidental: splitting one gated file into a gated half and an ungated half would have left the event
-validator and the injection fence editable with `doctor` still reporting GREEN.
+validator and the injection fence editable while the integrity hashes still passed.
 
 The installed layout mirrors this one, so the controller's import specifier is identical in both:
 

@@ -165,6 +165,13 @@ test("smoke command fences armed evidence to bytes written after its own start",
   assert.match(cli, /bytes\.subarray\(logOffset\)/);
 });
 
+test("startup skill requires the strong ARMED predicate, not top-level GREEN alone", () => {
+  const skill = fs.readFileSync(path.join(packageRoot, "skills", "kijito-start", "SKILL.md"), "utf8");
+  assert.match(skill, /doctor `wake\.status` exactly `ARMED`/);
+  assert.match(skill, /Top-level doctor\s+`GREEN` means no known integrity\/runtime fault; it does \*\*not\*\* by itself\s+prove the wake path is armed/);
+  assert.doesNotMatch(skill, /Require `running` plus doctor `GREEN`/);
+});
+
 test("sandbox EPERM process probe falls back to a fresh private heartbeat", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-heartbeat."));
   const runtime = path.join(root, "runtime");
