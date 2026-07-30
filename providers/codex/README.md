@@ -1,21 +1,46 @@
-# Codex Kijito hive wake consumer
+# Codex provider — Kijito hive wake consumer
 
-QA-gated implementation for the four-gate release in
-[`codex-kijito-parity-plan.md`](codex-kijito-parity-plan.md).
+The `codex` provider of [kijito-claude](../../README.md). QA-gated implementation of the four-gate
+release in [`codex-kijito-parity-plan.md`](codex-kijito-parity-plan.md) — a document RECORDED here
+for provenance, not gated on: hash-gating an install against a prose file outside the installable
+directory was a real defect, fixed in the 2026-07-30 fold.
 
-This package consumes the shipped Kijito monitor's per-persona event stream
-and wakes one dedicated Codex app-server thread. It does not install hooks,
-plugins, LaunchAgents, model catalogs, or changes to the ordinary Codex home.
+This provider consumes the shipped Kijito monitor's per-persona event stream and wakes one dedicated
+Codex app-server thread. It does not install hooks, plugins, LaunchAgents, model catalogs, or changes
+to the ordinary Codex home.
 
-All C1-C4 gates are green on the frozen controller bytes. Production is an
-explicit, isolated install: one private root and one launcher. Nothing starts
-at login, and the installer refuses to overwrite an existing target.
+Production is an explicit, isolated install: one private root and one launcher. Nothing starts at
+login, and the installer refuses to overwrite an existing target.
+
+## Layout
+
+The wake PROTOCOL is not Codex-specific and lives one level up in
+[`../_shared/wake-core.mjs`](../_shared/wake-core.mjs): event-line validation, the injection-fenced
+wake text, read-offset persistence, and the single-consumer lock. `controller.mjs` holds what is
+genuinely about Codex — supervising a `codex app-server` on a dedicated `CODEX_HOME`, owning one
+thread, delivering the wake turn — and binds the persona the shared core refuses to default.
+
+Both files are hash-gated at install and hash-checked by `doctor`. That is deliberate rather than
+incidental: splitting one gated file into a gated half and an ungated half would have left the event
+validator and the injection fence editable with `doctor` still reporting GREEN.
+
+The installed layout mirrors this one, so the controller's import specifier is identical in both:
+
+    <installRoot>/cli.mjs
+    <installRoot>/codex/controller.mjs
+    <installRoot>/_shared/wake-core.mjs
 
 ## Test
 
 ```sh
-/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node --test test/*.test.mjs
+node --test test/codex-hive-watch.test.mjs test/release-packaging.test.mjs
+node tools/refresh-manifest.mjs --check    # gated hashes still describe the files
 ```
+
+Do not pass `test/` as a directory: the runner would treat the `mock-app-server.mjs` and
+`prepare-live-gate.mjs` helpers as suites. After editing `controller.mjs`, `../_shared/wake-core.mjs`,
+or `test/codex-hive-watch.test.mjs`, run `node tools/refresh-manifest.mjs` — otherwise the next
+install fails with a hash mismatch that reads like corruption rather than a stale manifest.
 
 ## Required dedicated home
 
@@ -36,7 +61,7 @@ The release manifest owns only `~/.local/share/codex-kijito-hive` and
 runtime, then use the explicit launcher:
 
 ```sh
-node install.mjs
+node install.mjs                 # or, from the repo root: ./install.sh --provider codex
 codex-kijito-hive doctor
 codex-kijito-hive smoke
 codex-kijito-hive start
@@ -54,3 +79,18 @@ codex-kijito-hive uninstall --confirm-dedicated-home
 
 Uninstall removes only the dedicated root and launcher. It never edits the
 ordinary Codex home.
+
+## Skills
+
+The two skills in [`skills/`](skills/) deploy to `~/.codex/skills`, each with its `agents/openai.yaml`
+interface sidecar:
+
+```sh
+node install.mjs --skills-only                       # update skills on an existing install
+node install.mjs --skills-only --skills-root <dir>    # or somewhere else
+```
+
+A full install deploys them too. Unlike the install root, skills are written OVER — they are
+versioned prose meant to be updated. This path exists because both skills were, until the fold,
+present only at `~/.codex/skills` with no upstream in any repository: version-controlling them
+without a way to deploy them would have left the rescue half-done.

@@ -1,0 +1,120 @@
+name: test
+
+# WHY THIS EXISTS. Until 2026-07-30 this repo had publish-npm.yml and publish-pypi.yml and no test
+# workflow, so a version tag published without anything ever having run the suite or installed the
+# package. That is not hypothetical: four of nine scripts once drifted with the INSTALLED copy ahead
+# of the repo, the published packages shipped months-old behaviour for five weeks, and nothing
+# anywhere reported it — the suite at the time exercised the installed copies, so a drifted install
+# looked like a passing repo.
+#
+# So this workflow does the two things a green unit test cannot do on its own: it RUNS THE REAL
+# INSTALLER, and it inspects the BUILT PAYLOADS for the files each provider needs. A packaging
+# manifest that forgets a provider is invisible to every other check in the repo.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # jq is required by the Claude installer; tmux by the lifecycle suite's stand-in panes.
+      - run: sudo apt-get update && sudo apt-get install -y jq tmux
+
+      # --selftest first proves no conformance matcher can match an empty document, because a prose
+      # check that accepts anything reports green forever.
+      - name: shared doctrine across every provider
+        run: bash tests/conformance_test.sh --selftest
+
+      - name: codex controller + packaging suites
+        run: |
+          node --test providers/codex/test/codex-hive-watch.test.mjs \
+                       providers/codex/test/release-packaging.test.mjs
+
+      - name: codex gated hashes are current
+        run: node providers/codex/tools/refresh-manifest.mjs --check
+
+      # Runs the actual installer, then asserts the machine matches the repo. This is the step that
+      # would have caught the 2026-07-29 drift.
+      - name: install the claude provider, then prove no drift
+        run: |
+          ./install.sh
+          bash tests/drift_test.sh
+
+      - name: codex skills deploy
+        run: |
+          node providers/codex/install.mjs --skills-only --skills-root "$HOME/.codex/skills"
+          test -f "$HOME/.codex/skills/kijito-start/SKILL.md"
+          test -f "$HOME/.codex/skills/kijito-start/agents/openai.yaml"
+
+      - name: lifecycle suite
+        run: bash tests/lc_test.sh
+
+      # A packaging manifest that drops a provider breaks users and nothing else. There are four
+      # manifests (npm files[], wheel force-include, sdist include, and the installer's own
+      # iteration), so the payloads themselves are the only honest check.
+      - name: built payloads carry every provider
+        run: |
+          set -euo pipefail
+          npm pack --silent >/dev/null
+          TGZ=$(ls kijito-claude-*.tgz)
+          for f in install.sh NOTICE \
+                   providers/claude/install.sh \
+                   providers/claude/scripts/self-clear.sh \
+                   providers/claude/skills/kijito-qa-memory/SKILL.md \
+                   providers/codex/install.mjs \
+                   providers/codex/controller.mjs \
+                   providers/codex/release-manifest.json \
+                   providers/codex/test/codex-hive-watch.test.mjs \
+                   providers/codex/skills/kijito-qa-memory/agents/openai.yaml \
+                   providers/_shared/wake-core.mjs; do
+            tar tzf "$TGZ" | grep -qx "package/$f" || { echo "MISSING from npm payload: $f"; exit 1; }
+          done
+          # legacy/ is history, never shipped.
+          if tar tzf "$TGZ" | grep -q "legacy/"; then echo "legacy/ leaked into the npm payload"; exit 1; fi
+          pipx run build >/dev/null
+          python3 - <<'PY'
+          import zipfile, glob, sys
+          whl = glob.glob("dist/*.whl")[0]
+          names = set(zipfile.ZipFile(whl).namelist())
+          need = [
+              "kijito_claude/_assets/install.sh",
+              "kijito_claude/_assets/providers/claude/install.sh",
+              "kijito_claude/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
+              "kijito_claude/_assets/providers/codex/install.mjs",
+              "kijito_claude/_assets/providers/codex/controller.mjs",
+              "kijito_claude/_assets/providers/codex/test/codex-hive-watch.test.mjs",
+              "kijito_claude/_assets/providers/_shared/wake-core.mjs",
+          ]
+          missing = [n for n in need if n not in names]
+          if missing:
+              sys.exit("MISSING from wheel: " + ", ".join(missing))
+          print(f"wheel {whl}: all provider assets present")
+          PY
+
+      # The installer must work from the built package, not only from a clone -- that is the path
+      # npx and pipx users actually take.
+      - name: smoke-install the built npm payload into a throwaway HOME
+        run: |
+          set -euo pipefail
+          TGZ=$(ls kijito-claude-*.tgz)
+          SMOKE=$(mktemp -d); mkdir -p "$SMOKE/home" "$SMOKE/pkg"
+          tar xzf "$TGZ" -C "$SMOKE/pkg" --strip-components=1
+          HOME="$SMOKE/home" bash "$SMOKE/pkg/install.sh"
+          test -f "$SMOKE/home/.claude/skills/kijito-qa-memory/SKILL.md"
+          HOME="$SMOKE/home" bash "$SMOKE/pkg/install.sh" --provider codex --skills-only \
+            --skills-root "$SMOKE/home/.codex/skills"
+          test -f "$SMOKE/home/.codex/skills/kijito-qa-memory/SKILL.md"
+          echo "both providers install from the built payload"
