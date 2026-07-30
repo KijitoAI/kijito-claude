@@ -234,6 +234,10 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    const linkedCli = path.join(f.root, "linked-cli.mjs");
+    fs.symlinkSync(path.join(f.installRoot, "cli.mjs"), linkedCli);
+    const linkedDoctor = JSON.parse(run([process.execPath, linkedCli, "doctor"]).stdout);
+    assert.equal(linkedDoctor.status, "INACTIVE", "a symlinked direct CLI path must execute rather than silently no-op");
     const unknown = JSON.parse(run([f.launcher, "not-a-command"], 1).stdout);
     assert.equal(unknown.status, "RED");
     assert.equal(unknown.command, "not-a-command");
@@ -293,6 +297,15 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(corruptManifest.failure.category, "integrity");
     assert.match(corruptManifest.failure.stack, /SyntaxError/);
     assert.match(corruptManifest.reasons.join(" "), /integrity failure/);
+    for (const hostileText of ["invalid argument", "unknown command", "requires --confirm"]) {
+      fs.writeFileSync(manifestFile, `${hostileText}\n`, { mode: 0o600 });
+      const adversarialManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+      assert.equal(adversarialManifest.status, "RED");
+      assert.equal(adversarialManifest.command, "doctor");
+      assert.equal(adversarialManifest.wake.status, "RED", "untrusted parse text must not downgrade wake integrity");
+      assert.equal(adversarialManifest.failure.category, "integrity");
+      assert.match(adversarialManifest.failure.stack, /SyntaxError/);
+    }
     fs.writeFileSync(manifestFile, validManifestText, { mode: 0o600 });
     fs.renameSync(f.events, `${f.events}.held`);
     const missingEvents = JSON.parse(run([f.launcher, "doctor"], 1).stdout);

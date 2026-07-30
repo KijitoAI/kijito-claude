@@ -259,12 +259,21 @@ function inspectDoctor(manifest) {
 
 function failureCategory(error) {
   const message = String(error?.message ?? error);
-  if (/unknown command|requires --confirm|invalid argument/.test(message)) return "usage";
-  if (/controller|ownership|lock|arming|armed state|shutdown|app-server/.test(message)) return "ownership";
   if (error instanceof SyntaxError
-    || /manifest|hash mismatch|private|user-owned|directory|file|token|workspace|event stream|ordinary Codex|executable/.test(message)
     || ["EACCES", "EPERM", "ENOENT", "ENOTDIR", "ERR_MODULE_NOT_FOUND"].includes(error?.code)) return "integrity";
+  if (error instanceof CliUsageError) return "usage";
+  if (/controller|ownership|lock|arming|armed state|shutdown|app-server/.test(message)) return "ownership";
+  if (/manifest|hash mismatch|private|user-owned|directory|file|token|workspace|event stream|ordinary Codex|executable/.test(message)) {
+    return "integrity";
+  }
   return "operation";
+}
+
+class CliUsageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "CliUsageError";
+  }
 }
 
 function doctorFailure(manifest, error, command = "doctor") {
@@ -436,7 +445,7 @@ export async function waitArmed(
 }
 
 async function uninstall(manifest, confirmed) {
-  if (!confirmed) throw new Error("uninstall requires --confirm-dedicated-home");
+  if (!confirmed) throw new CliUsageError("uninstall requires --confirm-dedicated-home");
   await stop(manifest);
   if (sha256(manifest.paths.launcher) !== manifest.hashes.launcherSha256) throw new Error("refusing to remove modified launcher");
   const root = path.resolve(manifest.paths.installRoot);
@@ -484,12 +493,13 @@ async function main() {
     } finally { await stop(manifest); }
   } else if (command === "wait-armed") result = { status: "ARMED", event: await waitArmed(manifest) };
   else if (command === "uninstall") result = await uninstall(manifest, rest.includes("--confirm-dedicated-home"));
-  else throw new Error(`unknown command: ${command}`);
+  else throw new CliUsageError(`unknown command: ${command}`);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result?.status === "RED" || result?.wake?.status === "RED") process.exitCode = 1;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1]
+  && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
     const command = process.argv[2] ?? "status";
     const result = doctorFailure(null, error, command);

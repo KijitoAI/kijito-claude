@@ -36,12 +36,17 @@ The installed layout mirrors this one, so the controller's import specifier is i
 ```sh
 node --test test/codex-hive-watch.test.mjs test/release-packaging.test.mjs
 node tools/refresh-manifest.mjs --check    # gated hashes still describe the files
+node test/mutation-gate.mjs                # executable 37-item mutation manifest
 ```
 
 Do not pass `test/` as a directory: the runner would treat the `mock-app-server.mjs` and
 `prepare-live-gate.mjs` helpers as suites. After editing `controller.mjs`, `../_shared/wake-core.mjs`,
 or `test/codex-hive-watch.test.mjs`, run `node tools/refresh-manifest.mjs` — otherwise the next
 install fails with a hash mismatch that reads like corruption rather than a stale manifest.
+
+`test/mutation-gate.mjs` is the auditable source for mutation claims: every entry names the
+property, applies an exact mutation to a private temporary specimen, refreshes that specimen's
+manifest, and requires the named assertion—not merely an unrelated hash check—to fail.
 
 ## Required dedicated home
 
@@ -55,9 +60,11 @@ The live gate creates a private temporary `CODEX_HOME` containing:
 The bearer token is passed through `KIJITO_API_TOKEN`; it is never placed on a
 command line or in controller state.
 
-The helper prints an explicit cleanup command for its private temporary root and prunes safe roots
-older than six hours on its next run. Run the printed command as soon as the live gate finishes;
-the copied `auth.json` is sensitive recovery material, not an ordinary disposable test fixture.
+The helper prints an explicit cleanup command for its private temporary root. On its next run it
+prunes safe roots older than six hours unless a valid state file names a PID that is still live;
+PID reuse deliberately fails safe by retaining the root. Run the printed command as soon as the
+live gate finishes: the copied `auth.json` is sensitive recovery material, not ordinary disposable
+test output.
 
 ## Install and operate
 
