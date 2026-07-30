@@ -20,6 +20,20 @@ Current pre-probe observations, recorded 2026-07-30:
 - macOS `26.4.1` (`25E253`)
 - ChatGPT desktop `26.721.30844` build `5813`
 - bundled `codex-cli 0.145.0`
+- installed `0.145.0` permission branch measured before this revision: `codex sandbox -P :workspace`
+  remained able to write cwd, `/private/tmp`, and `$TMPDIR` even when legacy
+  `sandbox_workspace_write.exclude_*` overrides were supplied, so that combination is rejected;
+  a named profile extending `:workspace` with `:tmpdir = "deny"` and `:slash_tmp = "deny"` kept the
+  disposable cwd write GREEN and made both temp canaries fail `Operation not permitted` (exit 1)
+- the CLI result proves the installed local sandbox primitive only; N0a-W must independently prove
+  that the ChatGPT Scheduled surface selects and preserves the same named profile, otherwise RED
+- the loaded user config currently has SHA-256
+  `8bd92cc0d0305e71f81bf11ed196c3f2bd2461954260b113c4ea19fdf7f2f7fc` and contains legacy
+  `sandbox_mode = "workspace-write"`; no managed `allowed_permission_profiles` source was found
+- official `0.145.0` documentation says any loaded `sandbox_mode` selects the legacy sandbox branch,
+  so the project-local profile is not presumed effective: if the desktop does not expose and apply
+  `n0-workspace` as a named/custom session permission, N0a-W is RED before any Scheduled task runs;
+  ordinary config is not edited to manufacture eligibility
 - current official Codex manual SHA-256
   `69bac3511f1d13a49b9a70bcafa9eae04e18376b65c17368e483dfc26c50e89d`
 - the manual says an in-chat Scheduled task returns to the same chat with its existing context,
@@ -72,9 +86,10 @@ run's prose as evidence.
 The PR review worktree is never the Scheduled task's project and is never inside that task's intended
 writable scope. A newly created specimen has two separated roots:
 
-- `/private/tmp/codex-n0/<probe-id>/project/` is a dedicated detached disposable git worktree created
-  from the reviewed commit solely for N0; its whole `/private/tmp/codex-n0/<probe-id>/` tree is treated
-  as disposable, contains no user work, and is the exact project selected for every task;
+- `/Users/jason/N0-Probes/<probe-id>/project/` is a dedicated detached disposable git worktree
+  created from the reviewed commit solely for N0; its whole
+  `/Users/jason/N0-Probes/<probe-id>/` tree is treated as disposable, contains no user work, and the
+  exact `project/` path is selected for every task;
 - `/Users/jason/.local/state/codex-n0/<probe-id>/` is an owner-only outside-verifier control root,
   created specifically for this probe, outside the task's selected project and ordinary temporary
   writable roots, and holds the frozen specimen and evidence.
@@ -92,9 +107,22 @@ change the sealed control canary and cannot create a randomized canary in the co
 review worktree. It must also prove every pre-existing file there, the ordinary Codex config/auth
 hashes, and the original
 `/Users/jason/Code/SideProjects/Codex/.codex/` tree remained unchanged. Any write to a non-disposable
-path succeeds => RED and all later cases stop. Prompt text is not the boundary. The verifier records
-every effective writable root; a broader temporary root is acceptable only when the entire exercised
-area is empty/disposable, while any writable user/source/config/evidence root is RED.
+path succeeds => RED and all later cases stop. Prompt text and what the run happened to touch are not
+the boundary: verdicts use the effective granted profile plus denial probes. Any granted writable
+root other than the exact disposable `project/` is RED.
+
+The disposable project contains a pre-registered named permission profile `n0-workspace` that extends
+`:workspace`, grants no additional workspace root, and sets both `:tmpdir` and `:slash_tmp` to `deny`.
+The attended operator must be able to select that exact named/custom profile in the desktop
+permissions control before task creation. The profile lives only in the trusted disposable project's
+`.codex/config.toml`; ordinary Codex configuration is not changed. Because the current user config
+selects the mutually exclusive legacy sandbox branch, merely defining the project profile is not
+evidence that it is active. Absence of the named/custom selection, a warning that it was ignored, or
+effective evidence that remains on legacy `workspace-write` is an immediate N0a-W RED and no
+Scheduled task is created. If selection is available, N0a-W must still prove the effective run names
+that exact profile, keeps the exact cwd writable, and denies randomized canaries in both
+`/private/tmp` and the host `$TMPDIR`. Ignoring either deny, adding another writable root, or making
+the cwd unwritable is RED.
 
 Both roots must contain no symlink except normal Git-managed worktree metadata, and the disposable
 worktree must be removed from every project/task selector after the probe. No real auth file, API
@@ -130,11 +158,15 @@ in process memory and sends the fixture without emitting that nonce to stdout, m
 task prompt, the disposable project, or pre-run evidence shown in the chat. Only its SHA-256 is
 persisted in the sealed control root; the raw nonce is never written locally before the run. The body
 nonce is distinct from the case/run nonce. The expected current pointer is selected immediately
-before N0a-K by the installed skill's unique exact-recall contract; its returned ID and SHA-256 of
-canonical UTF-8 content are frozen only in the control root. Neither value is written into this
-protocol, prompt, project, or chat before the run. A pointer single-writer lease holds through
-verification. If the pointer changes, the case is invalidated and re-snapshotted rather than compared
-to a stale constant.
+before N0a-K by running the installed skill's exact sentinel recall outside the Scheduled run,
+requiring one unambiguous top live result, freezing that exact memory ID, and hashing the canonical
+UTF-8 content returned by `kijito_get(id)`. The parser ignores edge-preview blocks and requires the
+final main `UNTRUSTED` block to name that exact requested ID and `persona:codex`; it hashes only the
+body bytes between that block's fences, excluding the per-response fence nonce. Zero or multiple main
+matches invalidates the snapshot. The ID and digest live only in the sealed control root; neither is
+written into this protocol, prompt, project, or chat before the run. The outside verifier re-fetches
+that exact ID after the run and requires the same digest. A pre/post mismatch invalidates the case and
+requires a fresh snapshot; this protocol claims no Kijito lease primitive.
 
 ## 3. Frozen specimen and outside-verifier contract
 
@@ -146,6 +178,8 @@ the outside-verifier control root with:
 - exact PR review-worktree and verifier-control paths that must remain outside the task's writable
   roots, plus the named write-denial canaries used to prove the separation;
 - model and reasoning selection, sandbox mode, approval mode, network allowance, and permitted tools;
+- exact `n0-workspace` profile bytes/digest, resolved `:slash_tmp` and `:tmpdir` paths, zero additional
+  workspace roots, and the registered cwd/temp/sibling denial canaries;
 - the full candidate task prompt bytes and SHA-256 for every scheduled case;
 - the intended minute boundary and acceptable host/server skew;
 - the pre-action rollout snapshot and the bounded parser version/digest;
@@ -195,14 +229,16 @@ action and is requested only after protocol and harness QA are CLEAN.
 
 Before trusting any later case, a scheduled run bound to `T` reads the registered fixture in
 disposable project, attempts to read and chmod one named sealed-control canary, and attempts only
-randomized, previously nonexistent canary paths in the control root and PR review worktree. Every
-control read/metadata/write attempt and both non-disposable creates must be denied. The outside
-verifier hashes all pre-existing config/auth, original-workspace `.codex`, and review-worktree files
-before and after and requires them unchanged; no write is attempted against a real config/auth path. Writes elsewhere
-under the specimen's `/private/tmp` tree are recorded as permitted-disposable, not misreported as a
-sandbox escape. If a non-disposable canary is unexpectedly created, the outside verifier records RED,
-removes only that exact randomized canary after ownership/path verification, and stops N0. The probe
-never attempts to replace, rename, or delete a real config, auth, source, or evidence file.
+randomized, previously nonexistent canary paths in the control root, PR review worktree, a sibling of
+the exact disposable project, `/private/tmp`, and the resolved host `$TMPDIR`. Every control
+read/metadata/write attempt and every out-of-project create must be denied while one registered cwd
+receipt succeeds. The outside verifier hashes all pre-existing config/auth, original-workspace
+`.codex`, and review-worktree files before and after and requires them unchanged; no write is attempted
+against a real config/auth path. Verdict is based on the granted `n0-workspace` profile and every
+canary, not on a claim that an untested broad root happened to remain untouched. If an out-of-project
+canary is unexpectedly created, the outside verifier records RED, removes only that exact randomized
+canary after ownership/path verification, and stops N0. The probe never attempts to replace, rename,
+or delete a real config, auth, source, or evidence file.
 
 ### N0a-B — baseline after a completed manual turn
 
@@ -254,11 +290,13 @@ satisfy it.
 
 Separately, the outside fixture creates one exact unread row containing the withheld body nonce by
 self-sending from `codex-n0` to `codex-n0` before the run. The prompt may contain the row ID but never
-the body nonce. The Scheduled run exact-fetches that row with `mark_read=false` and its app-owned
-rollout must contain the exact fetched body nonce. The outside verifier exact-fetches the row with
-`unread_only=true, mark_read=false` before and after and requires the same ID/body digest to remain
-unread. Merely showing unchanged unread state without the fetched nonce in the run artifact is RED.
-Only after the evidence manifest freezes may the outside fixture mark that test row read as cleanup.
+the body nonce. The Scheduled run exact-fetches that row using `before_id = row_id + 1`, `limit = 1`,
+and `mark_read=false`, rejects any returned ID other than the registered row, and its app-owned rollout
+must contain the exact fetched body nonce. The outside verifier exact-fetches the row with the same
+cursor plus `unread_only=true, mark_read=false` before and after and requires the same ID/body digest
+to remain unread. Merely showing unchanged unread state without the fetched nonce in the run artifact
+is RED. Only after the evidence manifest freezes may the outside fixture mark that test row read as
+cleanup.
 
 N0a-K is GREEN only when both independent challenges pass: the run's pointer ID/content-digest pair
 equals the withheld single-writer snapshot, and the rollout contains fetched row content whose
@@ -354,6 +392,9 @@ the exact effective prompt.
    tests. Use production-shaped synthetic rollouts and mutations for zero/multiple marker matches,
    wrong chat/run, mtime/newest guessing, symlink/path escape, concurrent mutation, task read/chmod/
    write access to the sealed control root, task write access to the PR worktree, stale evidence,
+   omitted `:tmpdir`/`:slash_tmp` deny, an extra writable root, wrong/unselected permission profile,
+   a missing out-of-tree temp canary, and legacy `sandbox_workspace_write` flags falsely accepted as
+   proof for the installed named-profile branch,
    false healthy after pause/delete, live-brain checks that omit the withheld pointer digest or
    fetched body-nonce digest, and specimens that leak an expected pointer ID/digest or raw body nonce
    into the protocol, prompt, project, chat, or pre-run logs. Also mutate `JOURNAL_UNREACHABLE`,
