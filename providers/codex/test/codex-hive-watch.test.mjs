@@ -29,9 +29,11 @@ function tempFixture() {
   const workspace = path.join(root, "workspace");
   const runtime = path.join(root, "runtime");
   const monitor = path.join(root, "monitor");
+  const lockDir = path.join(monitor, ".codex-hive-locks");
   for (const dir of [codexHome, workspace, runtime]) fs.mkdirSync(dir, { mode: 0o700 });
   fs.mkdirSync(monitor, { mode: 0o755 });
   fs.chmodSync(monitor, 0o755);
+  fs.mkdirSync(lockDir, { mode: 0o700 });
   fs.writeFileSync(path.join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
   fs.writeFileSync(path.join(codexHome, "config.toml"), "default_permissions = \"hive-read\"\n", { mode: 0o600 });
   const eventsFile = path.join(monitor, "events.codex.ndjson");
@@ -42,9 +44,10 @@ function tempFixture() {
     workspace,
     runtime,
     monitor,
+    lockDir,
     eventsFile,
     stateFile: path.join(runtime, "state.json"),
-    lockFile: path.join(monitor, "consumer.codex.lock"),
+    lockFile: path.join(lockDir, "consumer.codex.lock"),
     traceFile: path.join(root, "trace.ndjson"),
   };
 }
@@ -133,7 +136,7 @@ test("state is atomic and lock is single-owner", () => {
   } finally { cleanup(fixture); }
 });
 
-test("direct controller defaults to the stream-scoped persona lock", () => {
+test("direct controller defaults to the deterministic event-directory/persona lock", () => {
   const fixture = tempFixture();
   try {
     const tokenFile = path.join(fixture.root, "token");
@@ -153,7 +156,7 @@ test("direct controller defaults to the stream-scoped persona lock", () => {
       "--events", fixture.eventsFile,
       "--lock", path.join(fixture.runtime, "consumer.lock"),
       "--token-file", tokenFile,
-    ]), /stream-scoped persona lock/);
+    ]), /deterministic persona lock/);
   } finally { cleanup(fixture); }
 });
 
@@ -168,9 +171,14 @@ test("runtime path validator rejects non-private and non-empty boundaries", () =
     fs.chmodSync(fixture.runtime, 0o755);
     assert.throws(() => validateRuntimePaths(options), /runtime directory must not grant/);
     fs.chmodSync(fixture.runtime, 0o700);
-    fs.chmodSync(fixture.monitor, 0o775);
-    assert.throws(() => validateRuntimePaths(options), /global consumer-lock directory must not be group\/other writable/);
+    for (const mode of [0o775, 0o777]) {
+      fs.chmodSync(fixture.monitor, mode);
+      assert.throws(() => validateRuntimePaths(options), /monitor event directory must not be group\/other writable/);
+    }
     fs.chmodSync(fixture.monitor, 0o755);
+    fs.chmodSync(fixture.lockDir, 0o755);
+    assert.throws(() => validateRuntimePaths(options), /package-owned consumer-lock directory must not grant/);
+    fs.chmodSync(fixture.lockDir, 0o700);
     validateRuntimePaths(options);
     fs.chmodSync(fixture.eventsFile, 0o644);
     assert.throws(() => validateRuntimePaths(options), /events file must be private/);
@@ -353,6 +361,42 @@ test("ambiguous wake fails closed, then recovers through a durable-inbox reconci
   } finally { cleanup(fixture); }
 });
 
+test("real app-server loss at turn/start reconciles without replaying the uncertain mail batch", async () => {
+  const fixture = tempFixture();
+  const failMarker = path.join(fixture.root, "fail-turn-start-once");
+  const controller = new HiveWakeController({
+    ...fixture,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    childEnv: {
+      MOCK_TRACE_FILE: fixture.traceFile,
+      PROBE_FAIL_TURN_START_AT: "2",
+      PROBE_FAIL_TURN_START_MARKER: failMarker,
+    },
+    recoveryDelays: [],
+    output: () => {},
+  });
+  try {
+    await controller.start();
+    controller.queue({ kind: "new", id: 991, key: "new:991", trigger: "mail" });
+    await controller.flush();
+    assert.ok(controller.state.ambiguous, "turn/start transport loss must latch ambiguity");
+    assert.equal(controller.state.lastMailId, 0);
+    await controller.recover();
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.lastMailId, 0, "uncertain mail is never acknowledged or replayed");
+    const starts = fs.readFileSync(fixture.traceFile, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .filter((row) => row.method === "turn/start");
+    const texts = starts.map((row) => row.params.input[0].text);
+    assert.equal(texts.filter((text) => text.includes("Message IDs: 991")).length, 1);
+    assert.ok(texts.at(-1).includes("Message IDs: none"), "recovery sends only a durable-inbox reconciliation");
+  } finally {
+    await controller.stop();
+    cleanup(fixture);
+  }
+});
+
 test("idle app-server death becomes visible, recovers, and delivers the next event", async () => {
   const fixture = tempFixture();
   const logs = [];
@@ -419,6 +463,41 @@ test("clean stop drains an in-flight wake instead of recording false ambiguity",
     assert.equal(controller.state.lastMailId, 4201);
     assert.equal(fs.existsSync(fixture.lockFile), false);
     assert.equal(logs.some((row) => row.event === "surfaced"), true);
+  } finally { cleanup(fixture); }
+});
+
+test("stop drains an in-progress app-server replacement before stopping the new child", async () => {
+  const fixture = tempFixture();
+  const controller = new HiveWakeController({ ...fixture, output: () => {}, shutdownDrainMs: 1_000 });
+  let releaseStart;
+  let stoppedNewClient = false;
+  const replacement = {
+    status: "starting",
+    threadId: "test-thread",
+    start: async () => new Promise((resolve) => {
+      releaseStart = () => {
+        replacement.status = "idle";
+        resolve("test-thread");
+      };
+    }),
+    stop: async () => { stoppedNewClient = true; },
+  };
+  try {
+    controller.lock = acquireLock(fixture.lockFile);
+    controller.state.threadId = "test-thread";
+    controller.client = { status: "idle", threadId: "test-thread", stop: async () => {} };
+    controller.makeClient = () => replacement;
+    const restarting = controller.restartCodex();
+    await waitUntil(() => typeof releaseStart === "function");
+    const stopping = controller.stop();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(stoppedNewClient, false, "stop must wait for replacement startup instead of racing its child");
+    releaseStart();
+    await Promise.all([restarting, stopping]);
+    assert.equal(stoppedNewClient, true);
+    assert.equal(controller.state.clientStatus, "stopped");
+    assert.equal(controller.state.armedAt, null);
+    assert.equal(fs.existsSync(fixture.lockFile), false);
   } finally { cleanup(fixture); }
 });
 
@@ -578,8 +657,9 @@ test("release source contains no lifecycle or current-thread injection mechanism
   }
 });
 
-test("live-gate helper delegates to the stream-scoped default lock", () => {
+test("live-gate helper delegates to the deterministic event-directory/persona lock", () => {
   const source = fs.readFileSync(new URL("./prepare-live-gate.mjs", import.meta.url), "utf8");
-  assert.match(source, /lockFile:\s*defaultConsumerLockFile\(eventsFile\)/);
+  assert.match(source, /const lockFile = defaultConsumerLockFile\(eventsFile\)/);
+  assert.match(source, /mkdirSync\(path\.dirname\(lockFile\),\s*\{ recursive: true, mode: 0o700 \}\)/);
   assert.doesNotMatch(source, /lockFile:\s*path\.join\(runtime,\s*["']consumer\.lock["']\)/);
 });

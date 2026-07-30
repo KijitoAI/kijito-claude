@@ -40,6 +40,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     }
     clientMessageIds.add(msg.params.clientUserMessageId);
     turn += 1;
+    const failAt = Number(process.env.PROBE_FAIL_TURN_START_AT ?? 0);
+    const failMarker = process.env.PROBE_FAIL_TURN_START_MARKER;
+    if (turn === failAt && failMarker && !fs.existsSync(failMarker)) {
+      fs.writeFileSync(failMarker, "failed-before-response\n");
+      process.exit(70);
+    }
     const turnId = `mock-turn-${turn}`;
     emit({ id: msg.id, result: { turn: { id: turnId, status: "inProgress", items: [] } } });
     emit({ method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } } });

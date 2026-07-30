@@ -39,7 +39,7 @@ function parseArgs(argv) {
   const eventsFile = expand(values["events-file"] ?? path.join(home, ".cache", "kijito-inbox-monitor", "events.codex.ndjson"));
   const lockFile = defaultConsumerLockFile(eventsFile, "codex");
   if (values["lock-file"] !== undefined && expand(values["lock-file"]) !== lockFile) {
-    throw new Error("--lock-file must equal the stream-scoped Codex lock beside --events-file");
+    throw new Error("--lock-file must equal the deterministic Codex lock under the event-stream directory");
   }
   return {
     sourceRoot: expand(values["source-root"] ?? sourceRootDefault),
@@ -122,6 +122,17 @@ function requireOwnedNonWritableDirectory(dir, label) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o022) !== 0) {
     throw new Error(`${label} must be a user-owned, non-group/other-writable real directory`);
   }
+}
+
+function ensureLockDirectory(eventsFile, lockFile) {
+  requireOwnedNonWritableDirectory(path.dirname(eventsFile), "monitor event directory");
+  requirePrivateRegular(eventsFile, "monitor event stream");
+  const expected = defaultConsumerLockFile(eventsFile, "codex");
+  if (lockFile !== expected) throw new Error("consumer lock is not the deterministic Codex lock under the event-stream directory");
+  const lockDir = path.dirname(lockFile);
+  try { fs.mkdirSync(lockDir, { mode: 0o700 }); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  requirePrivateDirectory(lockDir, "package-owned consumer-lock directory");
 }
 
 function requireExecutable(file, label) {
@@ -208,6 +219,7 @@ function copyPrivate(source, target, mode = 0o600) {
 
 function install(options, { skipSkills = false } = {}) {
   requireAbsoluteDistinct(options);
+  ensureLockDirectory(options.eventsFile, options.lockFile);
   const sourceManifestFile = path.join(options.sourceRoot, "release-manifest.json");
   const controllerSource = path.join(options.sourceRoot, "controller.mjs");
   const cliSource = path.join(options.sourceRoot, "cli.mjs");
@@ -228,9 +240,9 @@ function install(options, { skipSkills = false } = {}) {
   // still carried forward into the installed manifest below for provenance.
   requirePrivateRegular(options.authSource, "auth source");
   requirePrivateRegular(options.tokenFile, "token file");
-  options.codexBin = fs.realpathSync(options.codexBin);
+  const codexResolvedAtInstall = fs.realpathSync(options.codexBin);
   options.nodeBin = fs.realpathSync(options.nodeBin);
-  requireExecutable(options.codexBin, "Codex binary");
+  requireExecutable(codexResolvedAtInstall, "Codex binary target");
   requireExecutable(options.nodeBin, "Node binary");
   const ordinaryBefore = {
     configSha256: optionalHash(options.ordinaryConfig),
@@ -273,6 +285,7 @@ function install(options, { skipSkills = false } = {}) {
         eventsFile: options.eventsFile,
         lockFile: options.lockFile,
         codexBin: options.codexBin,
+        codexResolvedAtInstall,
         nodeBin: options.nodeBin,
         ordinaryConfig: options.ordinaryConfig,
         ordinaryAuth: options.authSource
@@ -329,7 +342,7 @@ function runLauncher(launcher, args, nodeBin, timeout = 210_000) {
 }
 
 function acquireUpgradeLock(file) {
-  requireOwnedNonWritableDirectory(path.dirname(file), "upgrade-lock directory");
+  requirePrivateDirectory(path.dirname(file), "upgrade-lock directory");
   const token = randomBytes(16).toString("hex");
   const create = () => {
     const fd = fs.openSync(file, "wx", 0o600);
@@ -420,6 +433,11 @@ function copyUpgradeRuntime(oldRuntime, newRuntime, eventsFile) {
     }
   }
   state.controllerPid = null;
+  state.controllerRunId = null;
+  state.armAttemptId = null;
+  state.armedRunId = null;
+  state.armedAttemptId = null;
+  state.armedAt = null;
   state.lockTokenHash = null;
   state.heartbeatAt = null;
   state.clientStatus = "stopped";
@@ -433,6 +451,7 @@ function copyUpgradeRuntime(oldRuntime, newRuntime, eventsFile) {
 
 function upgrade(options) {
   requireAbsoluteDistinct(options);
+  ensureLockDirectory(options.eventsFile, options.lockFile);
   options.installRoot = path.join(fs.realpathSync(path.dirname(options.installRoot)), path.basename(options.installRoot));
   options.launcher = path.join(fs.realpathSync(path.dirname(options.launcher)), path.basename(options.launcher));
   requirePrivateRegular(path.join(options.installRoot, "installed-manifest.json"), "existing installed manifest");

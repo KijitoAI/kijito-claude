@@ -8,8 +8,10 @@ const codexHome = path.join(root, "codex-home");
 const workspace = path.join(root, "empty-workspace");
 const runtime = path.join(root, "runtime");
 const eventsFile = path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson");
+const lockFile = defaultConsumerLockFile(eventsFile);
 fs.chmodSync(root, 0o700);
 for (const directory of [codexHome, workspace, runtime]) fs.mkdirSync(directory, { mode: 0o700 });
+fs.mkdirSync(path.dirname(lockFile), { recursive: true, mode: 0o700 });
 
 const authSource = path.join(os.homedir(), ".codex", "auth.json");
 const authTarget = path.join(codexHome, "auth.json");
@@ -61,7 +63,7 @@ console.log(JSON.stringify({
   workspace,
   runtime,
   stateFile: path.join(runtime, "state.json"),
-  lockFile: defaultConsumerLockFile(eventsFile),
+  lockFile,
   eventsFile,
   tokenFile: path.join(os.homedir(), ".claude", ".kijito_api_token"),
 }, null, 2));

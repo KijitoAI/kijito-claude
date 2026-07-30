@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertArmedHealth, lockStatus, reapStaleLock, runtimeHealth, stop, waitArmed } from "../cli.mjs";
@@ -34,6 +34,24 @@ function waitForFile(file, pattern, timeoutMs = 5_000) {
   throw new Error(`timed out waiting for ${pattern} in ${file}`);
 }
 
+async function waitUntil(predicate, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("condition timed out");
+}
+
+function runAsync(file, args) {
+  const child = spawn(file, args, { encoding: "utf8", env: { ...process.env, CODEX_KIJITO_NODE: process.execPath } });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  return new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr })));
+}
+
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-package."));
   fs.chmodSync(root, 0o700);
@@ -52,8 +70,9 @@ function fixture() {
   fs.writeFileSync(events, "", { mode: 0o600 });
   const realBin = path.join(root, "codex-real");
   const bin = path.join(root, "codex");
+  const startDelayFile = path.join(root, "delay-app-server-start");
   const quote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
-  fs.writeFileSync(realBin, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(mockAppServer)} "$@"\n`, { mode: 0o700 });
+  fs.writeFileSync(realBin, `#!/bin/sh\nif [ -f ${quote(startDelayFile)} ]; then sleep 2; fi\nexec ${quote(process.execPath)} ${quote(mockAppServer)} "$@"\n`, { mode: 0o700 });
   fs.chmodSync(realBin, 0o700);
   fs.symlinkSync(realBin, bin);
   return {
@@ -63,7 +82,7 @@ function fixture() {
     // Hermetic skills target. Without this the installer's default (~/.codex/skills) would make
     // the test suite deploy into the developer's real Codex install.
     skillsRoot: path.join(root, "codex-skills"),
-    auth, config, token, events, bin,
+    auth, config, token, events, bin, realBin, startDelayFile,
   };
 }
 
@@ -118,8 +137,12 @@ function installArgs(f) {
 test("release install, doctor, duplicate refusal, and manifest-bound uninstall", () => {
   const f = fixture();
   try {
+    fs.chmodSync(path.dirname(f.events), 0o775);
+    const writableMonitor = run(installArgs(f), 1);
+    assert.match(writableMonitor.stderr, /monitor event directory must be a user-owned, non-group\/other-writable real directory/);
+    fs.chmodSync(path.dirname(f.events), 0o755);
     const customLock = run([...installArgs(f), "--lock-file", path.join(f.root, "custom.lock")], 1);
-    assert.match(customLock.stderr, /stream-scoped Codex lock/);
+    assert.match(customLock.stderr, /deterministic Codex lock/);
     const ordinaryBefore = fs.readFileSync(f.config, "utf8");
     const authBefore = fs.readFileSync(f.auth, "utf8");
     const installed = JSON.parse(run(installArgs(f)).stdout);
@@ -129,7 +152,8 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.deepEqual(installed.skills.map((s) => s.skill).sort(), ["kijito-qa-memory", "kijito-start"]);
     assert.ok(installed.skills.every((s) => s.target.startsWith(f.skillsRoot)));
     const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
-    assert.equal(manifest.paths.codexBin, fs.realpathSync(f.bin));
+    assert.equal(manifest.paths.codexBin, path.resolve(f.bin));
+    assert.equal(manifest.paths.codexResolvedAtInstall, fs.realpathSync(f.bin));
     const doctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
     assert.equal(doctor.status, "INACTIVE");
     assert.equal(doctor.wake.status, "INACTIVE");
@@ -137,16 +161,42 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    const nextRealBin = path.join(f.root, "codex-real-next");
+    fs.copyFileSync(f.realBin, nextRealBin);
+    fs.chmodSync(nextRealBin, 0o700);
+    fs.unlinkSync(f.bin);
+    fs.symlinkSync(nextRealBin, f.bin);
+    const retargetedDoctor = JSON.parse(run([f.launcher, "doctor"]).stdout);
+    assert.equal(retargetedDoctor.status, "INACTIVE");
+    assert.equal(retargetedDoctor.codexBin, path.resolve(f.bin));
+    assert.equal(retargetedDoctor.codexResolvedNow, fs.realpathSync(nextRealBin));
+    assert.equal(retargetedDoctor.codexTargetChanged, true, "the stable Codex symlink follows a vendor upgrade without wedging start");
     manifest.paths.lockFile = path.join(manifest.paths.runtime, "consumer.lock");
     fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-    const unscopedManifest = run([f.launcher, "doctor"], 1);
-    assert.match(unscopedManifest.stderr, /consumer lock is not stream-scoped/);
-    manifest.paths.lockFile = path.join(path.dirname(f.events), "consumer.codex.lock");
+    const unscopedManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(unscopedManifest.status, "RED");
+    assert.match(unscopedManifest.reasons.join(" "), /consumer lock is not the deterministic lock/);
+    manifest.paths.lockFile = path.join(path.dirname(f.events), ".codex-hive-locks", "consumer.codex.lock");
     fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o775);
-    const writableLockParent = run([f.launcher, "doctor"], 1);
-    assert.match(writableLockParent.stderr, /global consumer-lock directory is not a user-owned, non-group\/other-writable real directory/);
-    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o755);
+    const writableLockParent = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(writableLockParent.status, "RED");
+    assert.match(writableLockParent.reasons.join(" "), /package-owned consumer-lock directory is not a private user-owned real directory/);
+    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o700);
+    fs.writeFileSync(manifest.paths.lockFile, "{broken\n", { mode: 0o600 });
+    const corruptLock = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(corruptLock.status, "RED");
+    assert.equal(corruptLock.wake.status, "RED");
+    assert.match(corruptLock.reasons.join(" "), /integrity check failed/);
+    fs.unlinkSync(manifest.paths.lockFile);
+    const manifestFile = path.join(f.installRoot, "installed-manifest.json");
+    const validManifestText = fs.readFileSync(manifestFile, "utf8");
+    fs.writeFileSync(manifestFile, "{broken\n", { mode: 0o600 });
+    const corruptManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(corruptManifest.status, "RED");
+    assert.equal(corruptManifest.wake.status, "RED");
+    assert.match(corruptManifest.reasons.join(" "), /integrity check failed/);
+    fs.writeFileSync(manifestFile, validManifestText, { mode: 0o600 });
     fs.renameSync(f.events, `${f.events}.held`);
     const missingEvents = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
     assert.equal(missingEvents.status, "RED");
@@ -193,7 +243,7 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
   } finally { cleanupFixture(f); }
 });
 
-test("upgrade preserves thread and cursor, replays window events, and keeps one global persona lock", () => {
+test("upgrade preserves thread and cursor, replays window events, and keeps one event-directory/persona lock", () => {
   const f = fixture();
   try {
     run(installArgs(f));
@@ -218,8 +268,8 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
 
     fs.chmodSync(path.dirname(beforeManifest.paths.lockFile), 0o775);
     const writableUpgradeParent = run(upgradeArgs(f), 1);
-    assert.match(writableUpgradeParent.stderr, /upgrade-lock directory must be a user-owned, non-group\/other-writable real directory/);
-    fs.chmodSync(path.dirname(beforeManifest.paths.lockFile), 0o755);
+    assert.match(writableUpgradeParent.stderr, /package-owned consumer-lock directory must be a private user-owned real directory/);
+    fs.chmodSync(path.dirname(beforeManifest.paths.lockFile), 0o700);
 
     const upgraded = JSON.parse(run(upgradeArgs(f)).stdout);
     assert.equal(upgraded.status, "UPGRADED_INACTIVE");
@@ -228,7 +278,7 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
     assert.equal(fs.existsSync(upgraded.rollbackRoot), true, "rollback copy remains recoverable");
     const afterManifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
     assert.notEqual(afterManifest.installId, beforeManifest.installId);
-    assert.equal(afterManifest.paths.lockFile, path.join(path.dirname(f.events), "consumer.codex.lock"));
+    assert.equal(afterManifest.paths.lockFile, path.join(path.dirname(f.events), ".codex-hive-locks", "consumer.codex.lock"));
 
     const started = JSON.parse(run([f.launcher, "start"]).stdout);
     assert.equal(started.status, "ARMED");
@@ -238,6 +288,27 @@ test("upgrade preserves thread and cursor, replays window events, and keeps one 
     assert.equal(afterState.lastMailId, 7701);
     assert.equal(fs.existsSync(afterManifest.paths.lockFile), true);
     assert.equal(fs.existsSync(path.join(f.installRoot, "runtime", "consumer.lock")), false);
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("upgrade preflight rejection leaves the running old consumer and lock token untouched", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    run([f.launcher, "start"]);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const beforeText = fs.readFileSync(manifest.paths.lockFile, "utf8");
+    const before = JSON.parse(beforeText);
+    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o775);
+    const rejected = run(upgradeArgs(f), 1);
+    assert.match(rejected.stderr, /package-owned consumer-lock directory must be a private user-owned real directory/);
+    fs.chmodSync(path.dirname(manifest.paths.lockFile), 0o700);
+    assert.equal(fs.readFileSync(manifest.paths.lockFile, "utf8"), beforeText);
+    process.kill(before.pid, 0);
+    const status = JSON.parse(run([f.launcher, "status"]).stdout);
+    assert.equal(status.wake.status, "ARMED");
+    assert.equal(JSON.parse(fs.readFileSync(manifest.paths.lockFile, "utf8")).token, before.token);
     run([f.launcher, "stop"]);
   } finally { cleanupFixture(f); }
 });
@@ -258,6 +329,58 @@ test("upgrade of an armed controller returns armed on the same dedicated thread"
     assert.equal(after.degraded, null);
     assert.equal(after.recovery, null);
     assert.equal(after.clientStatus, "idle");
+    run([f.launcher, "stop"]);
+  } finally { cleanupFixture(f); }
+});
+
+test("hard-crash restart and SIGUSR1 stay RED until the current arming attempt completes", async () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    run([f.launcher, "start"]);
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const stateFile = path.join(manifest.paths.runtime, "state.json");
+    const beforeCrash = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const oldLock = JSON.parse(fs.readFileSync(manifest.paths.lockFile, "utf8"));
+    process.kill(oldLock.pid, "SIGKILL");
+    await waitUntil(() => {
+      try { process.kill(oldLock.pid, 0); return false; }
+      catch (error) { return error.code === "ESRCH"; }
+    }, 10_000);
+
+    fs.writeFileSync(f.startDelayFile, "delay\n");
+    const restarting = runAsync(f.launcher, ["start"]);
+    await waitUntil(() => {
+      try {
+        const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+        return state.controllerRunId !== beforeCrash.controllerRunId && state.clientStatus === "starting" && state.armedAt === null;
+      } catch { return false; }
+    }, 10_000);
+    fs.unlinkSync(f.startDelayFile);
+    const crashWindow = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(crashWindow.status, "RED");
+    assert.match(crashWindow.wake.reasons.join(" "), /has not recorded armed state|different controller run|different arming attempt|app-server is starting/);
+    const restarted = await restarting;
+    assert.equal(restarted.code, 0, restarted.stderr || restarted.stdout);
+    assert.equal(JSON.parse(restarted.stdout).status, "ARMED");
+
+    const afterCrash = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const liveLock = JSON.parse(fs.readFileSync(manifest.paths.lockFile, "utf8"));
+    fs.writeFileSync(f.startDelayFile, "delay\n");
+    process.kill(liveLock.pid, "SIGUSR1");
+    await waitUntil(() => {
+      const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      return state.armAttemptId !== afterCrash.armAttemptId && state.clientStatus === "starting" && state.armedAt === null;
+    }, 10_000);
+    fs.unlinkSync(f.startDelayFile);
+    const restartWindow = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(restartWindow.status, "RED");
+    assert.match(restartWindow.wake.reasons.join(" "), /has not recorded armed state|different arming attempt|app-server is starting/);
+    await waitUntil(() => {
+      const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+      return state.clientStatus === "idle" && state.armedAt && state.armedAttemptId === state.armAttemptId;
+    }, 10_000);
+    assert.equal(JSON.parse(run([f.launcher, "doctor"]).stdout).status, "ARMED");
     run([f.launcher, "stop"]);
   } finally { cleanupFixture(f); }
 });
@@ -291,7 +414,62 @@ test("failed upgraded bytes roll back and re-arm the previous installation", () 
   } finally { cleanupFixture(f); }
 });
 
-test("two install roots sharing one persona event stream cannot double-arm", () => {
+test("rollback reports when the restored old controller cannot re-arm", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    run([f.launcher, "start"]);
+    const beforeManifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    fs.appendFileSync(path.join(f.installRoot, "codex", "controller.mjs"), "\nthrow new Error(\"intentional restored-controller failure\");\n");
+
+    const badProviders = path.join(f.root, "bad-providers-rearm");
+    const badCodex = path.join(badProviders, "codex");
+    fs.cpSync(packageRoot, badCodex, { recursive: true });
+    fs.mkdirSync(path.join(badProviders, "_shared"), { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, "..", "_shared", "wake-core.mjs"), path.join(badProviders, "_shared", "wake-core.mjs"));
+    const badController = path.join(badCodex, "controller.mjs");
+    fs.appendFileSync(badController, "\nthrow new Error(\"intentional upgraded-controller failure before rollback\");\n");
+    const badReleaseFile = path.join(badCodex, "release-manifest.json");
+    const badRelease = JSON.parse(fs.readFileSync(badReleaseFile, "utf8"));
+    badRelease.artifacts.controllerSha256 = createHash("sha256").update(fs.readFileSync(badController)).digest("hex");
+    fs.writeFileSync(badReleaseFile, `${JSON.stringify(badRelease, null, 2)}\n`);
+
+    const failed = run([...upgradeArgs(f), "--source-root", badCodex], 1);
+    assert.match(failed.stderr, /rollback controller failed to re-arm/);
+    const restoredManifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    assert.equal(restoredManifest.installId, beforeManifest.installId);
+  } finally { cleanupFixture(f); }
+});
+
+test("upgrade holds rollback bytes when new ownership cannot be stopped safely", () => {
+  const f = fixture();
+  try {
+    run(installArgs(f));
+    run([f.launcher, "start"]);
+    const beforeManifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    const badProviders = path.join(f.root, "bad-providers-stop-refusal");
+    const badCodex = path.join(badProviders, "codex");
+    fs.cpSync(packageRoot, badCodex, { recursive: true });
+    fs.mkdirSync(path.join(badProviders, "_shared"), { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, "..", "_shared", "wake-core.mjs"), path.join(badProviders, "_shared", "wake-core.mjs"));
+    const badCli = path.join(badCodex, "cli.mjs");
+    const originalCli = fs.readFileSync(badCli, "utf8");
+    const mutatedCli = originalCli
+      .replace('else if (command === "start") result = await start(manifest);', 'else if (command === "start") { await start(manifest); throw new Error("intentional post-arm start failure"); }')
+      .replace('else if (command === "stop") result = await stop(manifest);', 'else if (command === "stop") throw new Error("intentional candidate stop refusal");');
+    assert.notEqual(mutatedCli, originalCli);
+    fs.writeFileSync(badCli, mutatedCli, { mode: 0o600 });
+
+    const failed = run([...upgradeArgs(f), "--source-root", badCodex], 1);
+    assert.match(failed.stderr, /rollback held because upgraded controller ownership could not be stopped safely/);
+    const currentManifest = JSON.parse(fs.readFileSync(path.join(f.installRoot, "installed-manifest.json"), "utf8"));
+    assert.notEqual(currentManifest.installId, beforeManifest.installId, "new ownership remains current when rollback is refused");
+    const backups = fs.readdirSync(path.dirname(f.installRoot)).filter((name) => name.startsWith(`${path.basename(f.installRoot)}.rollback.`));
+    assert.equal(backups.length, 1, "old installation remains recoverable in exactly one rollback root");
+  } finally { cleanupFixture(f); }
+});
+
+test("two install roots sharing one event-directory/persona stream cannot double-arm", () => {
   const first = fixture();
   const second = fixture();
   second.events = first.events;
@@ -392,6 +570,8 @@ test("drift gate compares installed Codex controller, shared core, and CLI bytes
     assert.match(drift.stdout, /ok\s+controller\.mjs/);
     assert.match(drift.stdout, /ok\s+wake-core\.mjs/);
     assert.match(drift.stdout, /ok\s+cli\.mjs/);
+    const driftSource = fs.readFileSync(path.join(repoRoot, "tests", "drift_test.sh"), "utf8");
+    assert.match(driftSource, /\.\/install\.sh --provider codex --upgrade/);
 
     const installedController = path.join(f.installRoot, "codex", "controller.mjs");
     fs.appendFileSync(installedController, "\n// drift mutation\n");
@@ -401,10 +581,11 @@ test("drift gate compares installed Codex controller, shared core, and CLI bytes
   } finally { cleanupFixture(f); }
 });
 
-test("smoke command fences armed evidence to bytes written after its own start", () => {
+test("smoke command fences armed evidence to its own run and arming generation", () => {
   const cli = fs.readFileSync(path.join(packageRoot, "cli.mjs"), "utf8");
   assert.match(cli, /const logOffset = fs\.existsSync\(logFile\) \? fs\.statSync\(logFile\)\.size : 0/);
-  assert.match(cli, /const armed = await waitArmed\(manifest, 180_000, logOffset\)/);
+  assert.match(cli, /const expectedRun = await waitFor/);
+  assert.match(cli, /const armed = await waitArmed\(manifest, 180_000, logOffset, expectedRun\)/);
   assert.match(cli, /armed: started\.armed/);
   assert.match(cli, /bytes\.subarray\(logOffset\)/);
 });
@@ -451,17 +632,57 @@ test("sandbox EPERM process probe falls back to a fresh private heartbeat", () =
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("wait-armed rejects a historical armed log when the controller is stopped", async () => {
+test("wait-armed rejects a historical armed row from a different live controller generation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-historical-arm."));
   const runtime = path.join(root, "runtime");
   fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  const token = "current-token";
+  const now = Date.now();
+  fs.writeFileSync(path.join(runtime, "consumer.lock"), `${JSON.stringify({ pid: 4242, token, persona: "codex" })}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(runtime, "state.json"), `${JSON.stringify({
+    schema: 1,
+    persona: "codex",
+    controllerPid: 4242,
+    controllerRunId: "current-run",
+    armAttemptId: "current-attempt",
+    armedRunId: "current-run",
+    armedAttemptId: "current-attempt",
+    armedAt: new Date(now).toISOString(),
+    heartbeatAt: new Date(now).toISOString(),
+    clientStatus: "idle",
+    lockTokenHash: createHash("sha256").update(token).digest("hex"),
+  })}\n`, { mode: 0o600 });
   fs.writeFileSync(path.join(runtime, "controller.ndjson"), `${JSON.stringify({
     ts: "2026-07-30T04:00:00.000Z",
     event: "armed",
     threadId: "historical-thread",
+    runId: "crashed-run",
+    armAttemptId: "crashed-attempt",
   })}\n`, { mode: 0o600 });
+  const probes = {
+    kill: () => {},
+    command: () => ({ command: `${process.execPath} ${path.join(packageRoot, "codex", "controller.mjs")}`, error: null }),
+  };
   try {
-    await assert.rejects(waitArmed({ paths: { runtime } }, 100), /controller stopped before arming: stopped/);
+    await assert.rejects(
+      waitArmed({ paths: { runtime } }, 100, 0, { runId: "current-run", armAttemptId: "current-attempt" }, probes),
+      /controller armed state timed out/,
+    );
+    fs.appendFileSync(path.join(runtime, "controller.ndjson"), `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: "armed",
+      threadId: "current-thread",
+      runId: "current-run",
+      armAttemptId: "current-attempt",
+    })}\n`);
+    const armed = await waitArmed(
+      { paths: { runtime } },
+      100,
+      0,
+      { runId: "current-run", armAttemptId: "current-attempt" },
+      probes,
+    );
+    assert.equal(armed.threadId, "current-thread");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -481,6 +702,10 @@ test("runtime health exposes every reviewed fault class and never maps INACTIVE 
     schema: 1,
     persona: "codex",
     controllerPid: 4242,
+    controllerRunId: "current-run",
+    armAttemptId: "current-attempt",
+    armedRunId: "current-run",
+    armedAttemptId: "current-attempt",
     armedAt: new Date(now - 1_000).toISOString(),
     heartbeatAt: new Date(now - 1_000).toISOString(),
     clientStatus: "idle",

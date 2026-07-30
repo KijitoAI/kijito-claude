@@ -57,9 +57,10 @@ command line or in controller state.
 
 ## Install and operate
 
-The release manifest owns only `~/.local/share/codex-kijito-hive` and
-`~/.local/bin/codex-kijito-hive`. Run the installer with a healthy Node 20+
-runtime, then use the explicit launcher:
+The release manifest owns the dedicated `~/.local/share/codex-kijito-hive` tree and
+`~/.local/bin/codex-kijito-hive` launcher, and records the external deterministic lock path under
+the monitor event directory. Run the installer with a healthy Node 20+ runtime, then use the
+explicit launcher:
 
 ```sh
 node install.mjs                 # or, from the repo root: ./install.sh --provider codex
@@ -82,19 +83,47 @@ node install.mjs --upgrade
 
 The upgrade stages and verifies new bytes, stops the sole old consumer, preserves its thread,
 mail high-water mark, event cursor, and log, swaps roots, and re-arms before returning. The
-consumer lock is stream-scoped rather than install-root-scoped, so a second root cannot double-arm
-the same persona. Mail written during the bounded swap remains after the inherited cursor and is
-consumed on the new run. A failed new start restores and re-arms the previous installation; a
-private rollback root is retained after success and reported in the command result.
+consumer lock is derived from the event-stream directory plus persona rather than the install root,
+so a second root consuming that same persona stream cannot double-arm it. Mail written during the
+bounded swap remains after the inherited cursor and is consumed on the new run. A failed new start
+restores and re-arms the previous installation; a private rollback root is retained after success
+and reported in the command result.
 
-The shared monitor directory that owns the global lock may be `0755`, matching the monitor's
-production layout. It must be a real directory owned by the current uid and may not be writable by
-group or other users (`0775`/`0777` are rejected). The event stream and lock files themselves remain
-private `0600`; the dedicated Codex home, workspace, runtime, and install directories remain `0700`.
-Direct controller invocations and the live-gate helper default to that same stream-scoped lock; a
-caller cannot substitute a per-runtime lock while consuming the shared production event stream.
-The installer and controller accept an explicit lock option only when it resolves to the exact
-deterministic lock beside the selected event file, and `doctor` rejects a manifest that diverges.
+The shared monitor directory may be `0755`, matching the monitor's production layout. It must be a
+real directory owned by the current uid and may not be writable by group or other users
+(`0775`/`0777` are rejected). The event stream remains private `0600`. Consumer and upgrade locks,
+including temporary quarantine names, live under the package-owned
+`<eventsDir>/.codex-hive-locks/` directory: that directory is strict `0700` and each lock is `0600`.
+The dedicated Codex home, workspace, runtime, and install directories also remain `0700`. Direct
+controller invocations and the live-gate helper derive the same event-directory/persona lock; a
+caller cannot substitute a per-runtime lock while consuming the selected stream. The installer and
+controller accept an explicit lock option only when it resolves to that exact deterministic path,
+and `doctor` rejects a manifest that diverges.
+
+The installed manifest preserves the configured Codex executable path instead of resolving it to a
+versioned release directory. This intentionally follows a stable vendor symlink across a normal
+Codex upgrade and avoids pinning a release directory that the vendor may prune. `doctor` resolves
+and validates the current executable target on every run; `codexTargetChanged` reports a retarget
+as information, while a missing or non-executable target is `RED`.
+
+`doctor` also compares the ordinary Codex `auth.json` and `config.toml` with their install-time
+snapshots. Codex may legitimately rewrite those files, in which case the controller fails closed
+with ordinary-state drift. After reviewing the change, refresh the supervised snapshot with
+`./install.sh --provider codex --upgrade`; do not edit `installed-manifest.json` by hand.
+
+The dedicated workspace must remain completely empty; even metadata such as `.DS_Store` makes
+`doctor` and `start` fail closed. Remove unexpected workspace entries before retrying.
+
+On a first install, the controller begins at the current end of the monitor event file, then issues
+a durable-inbox reconciliation so unread mail is discovered without replaying old event rows.
+Queued metadata is persisted while it is waiting for a delivery attempt. Once an attempt begins,
+its metadata moves to `lastAttempt`: an uncertain in-flight mail batch is never replayed directly;
+startup/recovery reconciles the durable inbox instead.
+
+If process inspection is denied but a fresh private heartbeat proves ownership, status can still
+identify the controller as running but `stop` deliberately refuses to signal it. Re-run `status`,
+`doctor`, or `stop` outside the restricted sandbox so the full process command can be verified;
+never remove or signal a heartbeat-only lock by force.
 
 Uninstall is manifest-bound and confirm-required:
 
@@ -102,8 +131,9 @@ Uninstall is manifest-bound and confirm-required:
 codex-kijito-hive uninstall --confirm-dedicated-home
 ```
 
-Uninstall removes only the dedicated root and launcher. It never edits the
-ordinary Codex home.
+Uninstall removes only the dedicated root and launcher. It never edits the ordinary Codex home or
+another installation's shared lock namespace. The empty `.codex-hive-locks` directory may remain
+because another stopped installation or future persona can use that same event-directory namespace.
 
 ## Skills
 

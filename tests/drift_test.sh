@@ -26,10 +26,10 @@ fi
 
 # Report which side is newer, so the operator knows which direction to fix.
 newer() {
-  local a="$1" b="$2" ta tb
+  local a="$1" b="$2" remediation="${3:-./install.sh}" ta tb
   ta=$(stat -f %m "$a" 2>/dev/null || stat -c %Y "$a" 2>/dev/null || echo 0)
   tb=$(stat -f %m "$b" 2>/dev/null || stat -c %Y "$b" 2>/dev/null || echo 0)
-  if [ "$ta" -gt "$tb" ]; then echo "REPO NEWER      → this machine is stale; run ./install.sh"
+  if [ "$ta" -gt "$tb" ]; then echo "REPO NEWER      → this machine is stale; run $remediation"
   elif [ "$tb" -gt "$ta" ]; then echo "INSTALLED NEWER → un-versioned work; copy into scripts/ and COMMIT it"
   else echo "same mtime, different bytes"; fi
 }
@@ -90,7 +90,7 @@ if [ -d "$CODEX_RUNTIME" ]; then
     if [ "$(shasum -a 256 "$source" | cut -d' ' -f1)" = "$(shasum -a 256 "$installed" | cut -d' ' -f1)" ]; then
       printf "  ok       %s\n" "$label"; same=$((same+1))
     else
-      printf "  DRIFT    %-26s %s\n" "$label" "$(newer "$source" "$installed")"; drift=$((drift+1))
+      printf "  DRIFT    %-26s %s\n" "$label" "$(newer "$source" "$installed" "./install.sh --provider codex --upgrade")"; drift=$((drift+1))
     fi
   done <<EOF
 controller.mjs|$REPO/providers/codex/controller.mjs|$CODEX_RUNTIME/codex/controller.mjs

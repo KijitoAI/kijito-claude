@@ -74,7 +74,9 @@ export function validateRuntimePaths({ codexHome, workspace, eventsFile, stateFi
   const stateRoot = path.dirname(stateFile);
   const lockRoot = path.dirname(lockFile);
   requirePrivateDirectory(stateRoot, "runtime directory");
-  requireOwnedNonWritableDirectory(lockRoot, "global consumer-lock directory");
+  requireOwnedNonWritableDirectory(path.dirname(eventsFile), "monitor event directory");
+  requirePrivateDirectory(lockRoot, "package-owned consumer-lock directory");
+  if (lockFile !== defaultConsumerLockFile(eventsFile)) throw new Error("consumer lock must be the deterministic persona lock under the event-stream directory");
   try { requirePrivateEventFile(eventsFile); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
@@ -272,6 +274,10 @@ export class AppServerClient {
     const text = fixedWakeText(batch);
     const digest = createHash("sha256").update(text).digest("hex");
     const terminal = this.waitForTurn(120_000);
+    // The app-server can die while the turn/start request is still pending. handleExit rejects both
+    // promises in the same tick; attach a handler now so the terminal rejection cannot surface as
+    // an unhandled rejection before the awaited request reaches its catch block below.
+    void terminal.catch(() => {});
     let started;
     try {
       started = await this.send("turn/start", {
@@ -363,6 +369,7 @@ export class HiveWakeController {
     this.recoveryTimer = null;
     this.busy = false;
     this.recovering = false;
+    this.restarting = false;
     this.recoveryAttempts = 0;
     this.stopping = false;
     this.lock = null;
@@ -561,6 +568,9 @@ export class HiveWakeController {
         phase: "app-server-exit",
       };
       this.state.clientStatus = "unavailable";
+      this.state.armedAt = null;
+      this.state.armedRunId = null;
+      this.state.armedAttemptId = null;
       this.persist();
       this.log({ event: "degraded", ...this.state.degraded });
     }
@@ -581,15 +591,30 @@ export class HiveWakeController {
   async replaceClient() {
     if (this.client) await this.client.stop().catch(() => {});
     this.client = this.makeClient();
+    this.state.clientStatus = "starting";
+    this.persist();
     await this.client.start(this.state.threadId);
+  }
+
+  beginArming(reason, newControllerRun = false) {
+    if (newControllerRun || !this.state.controllerRunId) this.state.controllerRunId = randomBytes(16).toString("hex");
+    this.state.armAttemptId = randomBytes(16).toString("hex");
+    this.state.armedAt = null;
+    this.state.armedRunId = null;
+    this.state.armedAttemptId = null;
+    this.state.clientStatus = "starting";
+    this.persist();
+    this.log({ event: "arming", reason, runId: this.state.controllerRunId, armAttemptId: this.state.armAttemptId });
   }
 
   markArmed(event = "armed") {
     const at = new Date().toISOString();
     this.state.armedAt = at;
+    this.state.armedRunId = this.state.controllerRunId;
+    this.state.armedAttemptId = this.state.armAttemptId;
     this.state.heartbeatAt = at;
     this.persist();
-    this.log({ event, threadId: this.state.threadId });
+    this.log({ event, threadId: this.state.threadId, runId: this.state.controllerRunId, armAttemptId: this.state.armAttemptId });
   }
 
   async recover() {
@@ -606,6 +631,7 @@ export class HiveWakeController {
     this.log({ event: "recovery-attempt", ...this.state.recovery });
     let ready = false;
     try {
+      this.beginArming("recovery");
       await this.replaceClient();
       this.state.ambiguous = null;
       this.state.degraded = null;
@@ -631,8 +657,9 @@ export class HiveWakeController {
       this.scheduleRecovery();
       return;
     }
+    if (this.stopping) return;
     await this.flush();
-    if (!this.state.ambiguous && !this.state.degraded) this.markArmed();
+    if (!this.stopping && !this.state.ambiguous && !this.state.degraded) this.markArmed();
   }
 
   async start() {
@@ -643,7 +670,7 @@ export class HiveWakeController {
     this.state.startedAt = new Date().toISOString();
     this.state.stoppedAt = null;
     this.state.heartbeatAt = this.state.startedAt;
-    this.persist();
+    this.beginArming("controller-start", true);
     this.client = this.makeClient();
     try {
       const threadId = await this.client.start(this.state.threadId);
@@ -681,6 +708,10 @@ export class HiveWakeController {
         phase: "startup",
       };
       this.state.heartbeatAt = null;
+      this.state.clientStatus = "unavailable";
+      this.state.armedAt = null;
+      this.state.armedRunId = null;
+      this.state.armedAttemptId = null;
       this.state.stoppedAt = new Date().toISOString();
       this.persist();
       releaseLock(this.lock);
@@ -690,11 +721,30 @@ export class HiveWakeController {
   }
 
   async restartCodex() {
-    if (this.busy || this.client.status !== "idle") throw new Error("restart requires idle controller");
-    await this.replaceClient();
-    this.reconcile("codex-restart");
-    await this.flush();
-    this.log({ event: "rearmed-after-codex-restart", threadId: this.state.threadId });
+    if (this.stopping || this.busy || this.recovering || this.restarting || this.client.status !== "idle") {
+      throw new Error("restart requires idle controller");
+    }
+    this.restarting = true;
+    this.beginArming("codex-restart");
+    try {
+      await this.replaceClient();
+      this.reconcile("codex-restart");
+      await this.flush();
+      if (!this.stopping && !this.state.ambiguous && !this.state.degraded) this.markArmed("rearmed-after-codex-restart");
+    } catch (error) {
+      this.state.degraded = {
+        at: new Date().toISOString(),
+        reason: error.message,
+        phase: "codex-restart",
+      };
+      this.state.clientStatus = "unavailable";
+      this.persist();
+      this.log({ event: "degraded", ...this.state.degraded });
+      this.scheduleRecovery();
+      throw error;
+    } finally {
+      this.restarting = false;
+    }
   }
 
   async stop() {
@@ -706,8 +756,10 @@ export class HiveWakeController {
     this.heartbeatTimer = null;
     this.recoveryTimer = null;
     const drainDeadline = Date.now() + (this.options.shutdownDrainMs ?? 125_000);
-    while (this.busy && Date.now() < drainDeadline) await new Promise((resolve) => setTimeout(resolve, 25));
-    if (this.busy) {
+    while ((this.busy || this.recovering || this.restarting) && Date.now() < drainDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (this.busy || this.recovering || this.restarting) {
       this.state.needsReconcile = true;
       this.log({ event: "shutdown-drain-timeout" });
     }
@@ -721,6 +773,9 @@ export class HiveWakeController {
       this.state.stoppedAt = new Date().toISOString();
       this.state.heartbeatAt = null;
       this.state.clientStatus = "stopped";
+      this.state.armedAt = null;
+      this.state.armedRunId = null;
+      this.state.armedAttemptId = null;
       this.persist();
       releaseLock(this.lock);
       this.lock = null;
@@ -751,7 +806,7 @@ export function parseArgs(argv) {
   const eventsFile = path.resolve(values.events ?? path.join(os.homedir(), ".cache", "kijito-inbox-monitor", "events.codex.ndjson"));
   const lockFile = defaultConsumerLockFile(eventsFile);
   if (values.lock !== undefined && path.resolve(values.lock) !== lockFile) {
-    throw new Error("--lock must equal the stream-scoped persona lock beside --events");
+    throw new Error("--lock must equal the deterministic persona lock under the event-stream directory");
   }
   const tokenFile = path.resolve(values["token-file"] ?? path.join(os.homedir(), ".claude", ".kijito_api_token"));
   return {

@@ -42,6 +42,13 @@ function checkPrivateFile(file, label) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) throw new Error(`${label} is not one private user-owned regular file`);
 }
 
+function checkExecutableTarget(file, label) {
+  const resolved = fs.realpathSync(file);
+  const stat = fs.lstatSync(resolved);
+  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) === 0) throw new Error(`${label} target is not an executable regular file`);
+  return resolved;
+}
+
 function optionalHash(file) {
   try { return sha256(file); }
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
@@ -72,7 +79,7 @@ function readRuntimeState(manifest) {
 
 function lockFileFor(manifest) {
   return manifest.paths.lockFile
-    ?? (manifest.paths.eventsFile ? path.join(path.dirname(manifest.paths.eventsFile), "consumer.codex.lock") : path.join(manifest.paths.runtime, "consumer.lock"));
+    ?? (manifest.paths.eventsFile ? path.join(path.dirname(manifest.paths.eventsFile), ".codex-hive-locks", "consumer.codex.lock") : path.join(manifest.paths.runtime, "consumer.lock"));
 }
 
 function freshHeartbeat(state, pid, now = Date.now()) {
@@ -143,6 +150,8 @@ export function runtimeHealth(manifest, controller, now = Date.now()) {
   if (state?.recovery) reasons.push(`recovery incomplete since ${state.recovery.at ?? "unknown"}`);
   if (controller.state === "running") {
     if (!state?.armedAt) reasons.push("controller has not recorded armed state");
+    if (!state?.controllerRunId || state.armedRunId !== state.controllerRunId) reasons.push("armed state belongs to a different controller run");
+    if (!state?.armAttemptId || state.armedAttemptId !== state.armAttemptId) reasons.push("armed state belongs to a different arming attempt");
     if (!freshHeartbeat(state, controller.pid, now)) reasons.push("controller heartbeat is stale or belongs to another pid");
     if (!["idle", "active"].includes(state?.clientStatus)) reasons.push(`owned app-server is ${state?.clientStatus ?? "unknown"}`);
   }
@@ -164,14 +173,15 @@ export function assertArmedHealth(wake) {
   return wake;
 }
 
-export function doctor(manifest) {
-  const expectedLockFile = path.join(path.dirname(manifest.paths.eventsFile), "consumer.codex.lock");
-  if (lockFileFor(manifest) !== expectedLockFile) throw new Error("manifest consumer lock is not stream-scoped beside the event file");
+function inspectDoctor(manifest) {
+  const expectedLockFile = path.join(path.dirname(manifest.paths.eventsFile), ".codex-hive-locks", "consumer.codex.lock");
+  if (lockFileFor(manifest) !== expectedLockFile) throw new Error("manifest consumer lock is not the deterministic lock under the event-stream directory");
   checkRealPrivateDirectory(installRoot, "install root");
   checkRealPrivateDirectory(manifest.paths.codexHome, "dedicated Codex home");
   checkRealPrivateDirectory(manifest.paths.workspace, "dedicated workspace");
   checkRealPrivateDirectory(manifest.paths.runtime, "runtime directory");
-  checkRealOwnedNonWritableDirectory(path.dirname(lockFileFor(manifest)), "global consumer-lock directory");
+  checkRealOwnedNonWritableDirectory(path.dirname(manifest.paths.eventsFile), "monitor event directory");
+  checkRealPrivateDirectory(path.dirname(lockFileFor(manifest)), "package-owned consumer-lock directory");
   checkRealPrivateDirectory(path.dirname(controllerFile), "controller directory");
   checkRealPrivateDirectory(path.dirname(wakeCoreFile), "shared wake-core directory");
   if (fs.readdirSync(manifest.paths.workspace).length !== 0) throw new Error("dedicated workspace is not empty");
@@ -197,6 +207,9 @@ export function doctor(manifest) {
   if (!config.includes("hooks = false") || config.includes("[hooks") || config.includes("LaunchAgent") || config.includes("KeepAlive")) throw new Error("dedicated config violates the no-hooks boundary");
   const token = fs.readFileSync(files.token, "utf8").trim();
   if (!token.startsWith("kjt_") || token.length < 20) throw new Error("token file is not a Kijito token");
+  const codexResolvedNow = checkExecutableTarget(manifest.paths.codexBin, "Codex binary");
+  const codexTargetChanged = typeof manifest.paths.codexResolvedAtInstall === "string"
+    && codexResolvedNow !== manifest.paths.codexResolvedAtInstall;
   const eventExists = fs.existsSync(manifest.paths.eventsFile);
   if (eventExists) checkPrivateFile(manifest.paths.eventsFile, "monitor event stream");
   const ordinaryNow = {
@@ -221,11 +234,38 @@ export function doctor(manifest) {
     launchAgentInstalled: false,
     workspaceEmpty: true,
     eventStreamReady: eventExists,
+    codexBin: manifest.paths.codexBin,
+    codexResolvedNow,
+    codexTargetChanged,
     ordinaryStateMatchesInstallSnapshot,
     controller: status,
     reasons: [...integrityReasons, ...wake.reasons],
     wake: { status: wake.status, reasons: wake.reasons },
   };
+}
+
+function doctorFailure(manifest, error) {
+  const reason = `integrity check failed: ${error.message}`;
+  return {
+    status: "RED",
+    product: manifest?.product ?? "codex-kijito-hive",
+    version: manifest?.version ?? null,
+    controllerSha256: manifest?.hashes?.controllerSha256 ?? null,
+    wakeCoreSha256: manifest?.hashes?.wakeCoreSha256 ?? null,
+    hooksDisabled: null,
+    launchAgentInstalled: null,
+    workspaceEmpty: null,
+    eventStreamReady: null,
+    ordinaryStateMatchesInstallSnapshot: null,
+    controller: { state: "unknown" },
+    reasons: [reason],
+    wake: { status: "RED", reasons: [reason] },
+  };
+}
+
+export function doctor(manifest) {
+  try { return inspectDoctor(manifest); }
+  catch (error) { return doctorFailure(manifest, error); }
 }
 
 function controllerArgs(manifest) {
@@ -289,7 +329,13 @@ export async function start(manifest) {
       if (["invalid-lock", "stale-lock", "pid-mismatch", "unverifiable-lock", "invalid-state"].includes(current.state)) throw new Error(`controller entered ${current.state}`);
       return current.state === "running" ? current : null;
     }, 10_000, "controller ownership");
-    const armed = await waitArmed(manifest, 180_000, logOffset);
+    const expectedRun = await waitFor(() => {
+      const runtime = readRuntimeState(manifest);
+      return runtime?.controllerPid === running.pid && runtime.controllerRunId && runtime.armAttemptId
+        ? { runId: runtime.controllerRunId, armAttemptId: runtime.armAttemptId }
+        : null;
+    }, 10_000, "controller arming generation");
+    const armed = await waitArmed(manifest, 180_000, logOffset, expectedRun);
     return { status: "ARMED", ...running, logFile, logOffset, armed };
   } catch (error) {
     try { await stop(manifest); } catch {}
@@ -319,23 +365,38 @@ export async function stop(manifest, probes = { kill: process.kill.bind(process)
   return { status: "STOPPED", pid };
 }
 
-export async function waitArmed(manifest, timeoutMs = 180_000, logOffset = 0) {
+export async function waitArmed(
+  manifest,
+  timeoutMs = 180_000,
+  logOffset = 0,
+  expectedRun = null,
+  probes = { kill: process.kill.bind(process), command: processCommand },
+) {
   const logFile = path.join(manifest.paths.runtime, "controller.ndjson");
+  let run = expectedRun;
   return waitFor(() => {
-    const ownership = lockStatus(manifest);
+    const ownership = lockStatus(manifest, Date.now(), probes);
     if (ownership.state !== "running") throw new Error(`controller stopped before arming: ${ownership.state}`);
+    const runtime = readRuntimeState(manifest);
+    if (!runtime?.controllerRunId || !runtime?.armAttemptId) return null;
+    run ??= { runId: runtime.controllerRunId, armAttemptId: runtime.armAttemptId };
+    if (!run.runId || !run.armAttemptId) return null;
+    if (runtime.controllerRunId !== run.runId || runtime.armAttemptId !== run.armAttemptId) {
+      throw new Error("controller arming generation changed while waiting");
+    }
     let bytes;
     try { bytes = fs.readFileSync(logFile); } catch { return null; }
     if (bytes.length < logOffset) throw new Error("controller log truncated after start");
     const text = bytes.subarray(logOffset).toString("utf8");
     const rows = text.split("\n").filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
-    const armed = rows.findLast((row) => row.event === "armed");
+    const armed = rows.findLast((row) => ["armed", "rearmed-after-codex-restart"].includes(row.event)
+      && row.runId === run.runId && row.armAttemptId === run.armAttemptId);
     const ambiguous = rows.findLast((row) => row.event === "ambiguous");
     const degraded = rows.findLast((row) => row.event === "degraded");
     if (ambiguous && (!armed || ambiguous.ts > armed.ts)) return null;
     if (degraded && (!armed || degraded.ts > armed.ts)) return null;
     if (!armed) return null;
-    const finalOwnership = lockStatus(manifest);
+    const finalOwnership = lockStatus(manifest, Date.now(), probes);
     if (finalOwnership.state !== "running") throw new Error(`controller stopped while arming: ${finalOwnership.state}`);
     const wake = runtimeHealth(manifest, finalOwnership);
     if (wake.status !== "ARMED") return null;
@@ -355,8 +416,16 @@ async function uninstall(manifest, confirmed) {
 }
 
 async function main() {
-  const manifest = loadManifest();
   const [command = "status", ...rest] = process.argv.slice(2);
+  let manifest;
+  try { manifest = loadManifest(); }
+  catch (error) {
+    if (command !== "doctor") throw error;
+    const result = doctorFailure(null, error);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
   let result;
   if (command === "doctor") result = doctor(manifest);
   else if (command === "status") {

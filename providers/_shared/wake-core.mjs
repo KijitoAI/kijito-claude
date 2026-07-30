@@ -49,7 +49,7 @@ export function defaultConsumerLockFile(eventsFile, persona) {
   requirePersona(persona);
   if (typeof eventsFile !== "string" || eventsFile.length === 0) throw new Error("wake-core: events file is required");
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(persona)) throw new Error("wake-core: persona must be a filename-safe name");
-  return path.join(path.dirname(path.resolve(eventsFile)), `consumer.${persona}.lock`);
+  return path.join(path.dirname(path.resolve(eventsFile)), ".codex-hive-locks", `consumer.${persona}.lock`);
 }
 
 export function parseEventLine(line, persona) {
@@ -114,6 +114,10 @@ export function initialState(persona) {
     degraded: null,
     recovery: null,
     controllerPid: null,
+    controllerRunId: null,
+    armAttemptId: null,
+    armedRunId: null,
+    armedAttemptId: null,
     lockTokenHash: null,
     startedAt: null,
     stoppedAt: null,
@@ -187,7 +191,7 @@ export function requirePrivateDirectory(dir, label) {
 
 // Shared monitor directories commonly need to be traversable by local tooling, so 0755 is a
 // valid production shape. Ownership and mutation are the security boundary here: another uid
-// must never be able to replace or remove the global consumer lock.
+// must never be able to replace the private event stream or its package-owned lock namespace.
 export function requireOwnedNonWritableDirectory(dir, label) {
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} must be a real directory`);
