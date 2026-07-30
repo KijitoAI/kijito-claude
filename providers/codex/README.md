@@ -44,9 +44,10 @@ Do not pass `test/` as a directory: the runner would treat the `mock-app-server.
 or `test/codex-hive-watch.test.mjs`, run `node tools/refresh-manifest.mjs` — otherwise the next
 install fails with a hash mismatch that reads like corruption rather than a stale manifest.
 
-`test/mutation-gate.mjs` is the auditable source for mutation claims: every entry names the
-property, applies an exact mutation to a private temporary specimen, refreshes that specimen's
-manifest, and requires the named assertion—not merely an unrelated hash check—to fail.
+`test/mutation-gate.mjs` is the auditable source for mutation claims: every entry first proves its
+target test is green, then applies an exact mutation to a private temporary specimen, refreshes that
+specimen's manifest, and requires the target test to fail. Entries sharing one target test also
+require a mutation-specific assertion message, so a collateral teardown failure cannot count.
 
 ## Required dedicated home
 
@@ -60,11 +61,12 @@ The live gate creates a private temporary `CODEX_HOME` containing:
 The bearer token is passed through `KIJITO_API_TOKEN`; it is never placed on a
 command line or in controller state.
 
-The helper prints an explicit cleanup command for its private temporary root. On its next run it
-prunes safe roots older than six hours unless a valid state file names a PID that is still live;
-PID reuse deliberately fails safe by retaining the root. Run the printed command as soon as the
-live gate finishes: the copied `auth.json` is sensitive recovery material, not ordinary disposable
-test output.
+The helper prints an explicit cleanup command for its private temporary root. There is no background
+time sweeper: only the next live-gate invocation prunes safe roots older than six hours, unless a
+valid state file names a PID that is still live; PID reuse deliberately fails safe by retaining the
+root. Run the printed command as soon as the live gate finishes: the copied `auth.json` is sensitive
+recovery material, not ordinary disposable test output. The stale-lock QA fixture uses the separate
+`codex-hive-test.stale-lock.*` namespace and is removed by its test's `finally`, never by this pruner.
 
 ## Install and operate
 

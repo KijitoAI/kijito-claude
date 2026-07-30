@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertArmedHealth, lockStatus, reapStaleLock, runtimeHealth, stop, waitArmed } from "../cli.mjs";
 import { parseArgs as parseInstallArgs, upgrade as upgradeDirect } from "../install.mjs";
 
@@ -236,12 +236,22 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
     const linkedCli = path.join(f.root, "linked-cli.mjs");
     fs.symlinkSync(path.join(f.installRoot, "cli.mjs"), linkedCli);
-    const linkedDoctor = JSON.parse(run([process.execPath, linkedCli, "doctor"]).stdout);
+    const linkedResult = run([process.execPath, linkedCli, "doctor"]);
+    assert.notEqual(linkedResult.stdout.trim(), "", "a symlinked direct CLI path must execute rather than silently no-op");
+    const linkedDoctor = JSON.parse(linkedResult.stdout);
     assert.equal(linkedDoctor.status, "INACTIVE", "a symlinked direct CLI path must execute rather than silently no-op");
+    const vanishedArgv = path.join(f.root, "vanished-cli-entry.mjs");
+    const importedCli = pathToFileURL(path.join(f.installRoot, "cli.mjs")).href;
+    const importOnly = spawnSync(process.execPath, [
+      "--input-type=module",
+      "--eval",
+      `process.argv[1] = ${JSON.stringify(vanishedArgv)}; await import(${JSON.stringify(importedCli)});`,
+    ], { encoding: "utf8" });
+    assert.equal(importOnly.status, 0, importOnly.stderr || "a vanished argv entry must not break library import");
     const unknown = JSON.parse(run([f.launcher, "not-a-command"], 1).stdout);
-    assert.equal(unknown.status, "RED");
+    assert.equal(unknown.status, "RED", "usage failures keep a structured RED envelope");
     assert.equal(unknown.command, "not-a-command");
-    assert.equal(unknown.failure.category, "usage");
+    assert.equal(unknown.failure.category, "usage", "unknown commands use the typed usage category");
     assert.match(unknown.failure.stack, /unknown command: not-a-command/);
     assert.equal(unknown.wake.status, "UNKNOWN", "a usage error must not claim the wake path itself is red");
     const nextRealBin = path.join(f.root, "codex-real-next");
@@ -257,7 +267,7 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     manifest.paths.lockFile = path.join(manifest.paths.runtime, "consumer.lock");
     fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     const unscopedManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
-    assert.equal(unscopedManifest.status, "RED");
+    assert.equal(unscopedManifest.status, "RED", "doctor integrity exceptions keep a structured RED envelope");
     assert.match(unscopedManifest.reasons.join(" "), /consumer lock is not the deterministic lock/);
     manifest.paths.lockFile = path.join(path.dirname(f.events), ".codex-hive-locks", "consumer.codex.lock");
     fs.writeFileSync(path.join(f.installRoot, "installed-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -299,14 +309,17 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.match(corruptManifest.reasons.join(" "), /integrity failure/);
     for (const hostileText of ["invalid argument", "unknown command", "requires --confirm"]) {
       fs.writeFileSync(manifestFile, `${hostileText}\n`, { mode: 0o600 });
-      const adversarialManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
-      assert.equal(adversarialManifest.status, "RED");
-      assert.equal(adversarialManifest.command, "doctor");
-      assert.equal(adversarialManifest.wake.status, "RED", "untrusted parse text must not downgrade wake integrity");
-      assert.equal(adversarialManifest.failure.category, "integrity");
-      assert.match(adversarialManifest.failure.stack, /SyntaxError/);
+      try {
+        const adversarialManifest = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+        assert.equal(adversarialManifest.status, "RED");
+        assert.equal(adversarialManifest.command, "doctor");
+        assert.equal(adversarialManifest.wake.status, "RED", "untrusted parse text must not downgrade wake integrity");
+        assert.equal(adversarialManifest.failure.category, "integrity");
+        assert.match(adversarialManifest.failure.stack, /SyntaxError/);
+      } finally {
+        fs.writeFileSync(manifestFile, validManifestText, { mode: 0o600 });
+      }
     }
-    fs.writeFileSync(manifestFile, validManifestText, { mode: 0o600 });
     fs.renameSync(f.events, `${f.events}.held`);
     const missingEvents = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
     assert.equal(missingEvents.status, "RED");
@@ -798,7 +811,10 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
     fs.mkdirSync(path.dirname(fallbackCore), { mode: 0o700 });
     fs.writeFileSync(fallbackCore, wakeCoreBytes, { mode: 0o600 });
     fs.unlinkSync(wakeCore);
-    const missingCore = JSON.parse(run([f.launcher, "status"], 1).stdout);
+    const missingCoreRun = spawnSync(f.launcher, ["status"], { encoding: "utf8" });
+    assert.equal(missingCoreRun.status, 1, "installed CLI must not fall back to an out-of-root shared core");
+    assert.notEqual(missingCoreRun.stdout.trim(), "", "missing shared core must reach the structured RED handler");
+    const missingCore = JSON.parse(missingCoreRun.stdout);
     assert.equal(missingCore.status, "RED");
     assert.equal(missingCore.command, "status");
     assert.equal(missingCore.failure.category, "integrity");
@@ -1109,7 +1125,7 @@ test("runtime health exposes every reviewed fault class and never maps INACTIVE 
 });
 
 test("stale locks are reaped atomically, while heartbeat-only ownership can never be signalled", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-stale-lock."));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-hive-test.stale-lock."));
   const runtime = path.join(root, "runtime");
   fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
   const manifest = { paths: { runtime } };

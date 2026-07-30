@@ -23,9 +23,23 @@ function replaceOnce(root, file, before, after) {
   fs.writeFileSync(target, `${text.slice(0, first)}${after}${text.slice(first + before.length)}`);
 }
 
-function targetFailed(output, target) {
+function targetFailed(output, target, expectedFailure) {
   const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^(?:not ok \\d+ - |[✖✘]\\s+)${escaped}(?:\\s|$)`, "m").test(output);
+  const testFailed = new RegExp(`^(?:not ok \\d+ - |[✖✘]\\s+)${escaped}(?:\\s|$)`, "m").test(output);
+  return testFailed && (!expectedFailure || output.includes(expectedFailure));
+}
+
+function runTarget(specimen, specimenTmp, mutation) {
+  return spawnSync(node, ["--test", `--test-name-pattern=${mutation.target}`, ...mutation.files], {
+    cwd: specimen, encoding: "utf8", timeout: 90_000, maxBuffer: 20 * 1024 * 1024,
+    env: {
+      ...process.env,
+      CODEX_KIJITO_NODE: node,
+      TMPDIR: specimenTmp,
+      TMP: specimenTmp,
+      TEMP: specimenTmp,
+    },
+  });
 }
 
 const mutations = [
@@ -166,6 +180,7 @@ const mutations = [
     id: "M11",
     claim: "doctor integrity exceptions are structured RED",
     target: "release install, doctor, duplicate refusal, and manifest-bound uninstall",
+    expectedFailure: "doctor integrity exceptions keep a structured RED envelope",
     files: [packaging],
     mutate(root) {
       const file = path.join(root, "providers/codex/cli.mjs");
@@ -173,7 +188,12 @@ const mutations = [
       const start = text.indexOf("function doctorFailure");
       const end = text.indexOf("export function doctor", start);
       if (start < 0 || end < 0) throw new Error("M11 doctorFailure anchor missing");
-      const segment = text.slice(start, end).replaceAll('"RED"', '"INACTIVE"');
+      const original = text.slice(start, end);
+      const segment = original.replace(
+        '    status: "RED",',
+        '    status: category === "usage" ? "RED" : "INACTIVE", // MUTATION: downgrade integrity envelopes',
+      );
+      if (segment === original) throw new Error("M11 status anchor missing");
       fs.writeFileSync(file, `${text.slice(0, start)}${segment}${text.slice(end)}`);
     },
   },
@@ -355,6 +375,7 @@ const mutations = [
     id: "M27",
     claim: "a missing shared core still reaches the CLI structured RED handler",
     target: "doctor and uninstall fail closed on installed-byte tampering",
+    expectedFailure: "missing shared core must reach the structured RED handler",
     files: [packaging],
     mutate(root) {
       replaceOnce(root, "providers/codex/cli.mjs",
@@ -366,6 +387,7 @@ const mutations = [
     id: "M28",
     claim: "an installed CLI never falls back to a shared core outside its manifest-owned root",
     target: "doctor and uninstall fail closed on installed-byte tampering",
+    expectedFailure: "installed CLI must not fall back to an out-of-root shared core",
     files: [packaging],
     mutate(root) {
       replaceOnce(root, "providers/codex/cli.mjs",
@@ -410,6 +432,7 @@ const mutations = [
     id: "M32",
     claim: "structured failures distinguish usage from wake-path integrity",
     target: "release install, doctor, duplicate refusal, and manifest-bound uninstall",
+    expectedFailure: "unknown commands use the typed usage category",
     files: [packaging],
     mutate(root) {
       replaceOnce(root, "providers/codex/cli.mjs",
@@ -454,6 +477,7 @@ const mutations = [
     id: "M36",
     claim: "untrusted parse-error text cannot select the internal usage category",
     target: "release install, doctor, duplicate refusal, and manifest-bound uninstall",
+    expectedFailure: "untrusted parse text must not downgrade wake integrity",
     files: [packaging],
     mutate(root) {
       replaceOnce(root, "providers/codex/cli.mjs",
@@ -465,14 +489,34 @@ const mutations = [
     id: "M37",
     claim: "direct CLI execution recognizes symlink and /var realpath aliases",
     target: "release install, doctor, duplicate refusal, and manifest-bound uninstall",
+    expectedFailure: "a symlinked direct CLI path must execute rather than silently no-op",
     files: [packaging],
     mutate(root) {
       replaceOnce(root, "providers/codex/cli.mjs",
-        "if (process.argv[1]\n  && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {",
-        "if (import.meta.url === `file://${process.argv[1]}`) { // MUTATION: raw path aliases silently no-op");
+        "function isDirectExecution(argv1 = process.argv[1]) {\n  if (!argv1) return false;\n  try { return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(import.meta.url)); }\n  catch (error) { if (error.code === \"ENOENT\") return false; throw error; }\n}",
+        "function isDirectExecution(argv1 = process.argv[1]) {\n  return import.meta.url === `file://${argv1}`; // MUTATION: raw path aliases silently no-op\n}");
     },
   },
 ];
+
+const targetGroups = new Map();
+for (const mutation of mutations) {
+  targetGroups.set(mutation.target, [...(targetGroups.get(mutation.target) ?? []), mutation]);
+}
+for (const [target, group] of targetGroups) {
+  if (group.length < 2) continue;
+  if (group.some(({ expectedFailure }) => !expectedFailure)) {
+    throw new Error(`duplicate target lacks mutation-specific failure evidence: ${target}`);
+  }
+  if (new Set(group.map(({ expectedFailure }) => expectedFailure)).size !== group.length) {
+    throw new Error(`duplicate target reuses failure evidence: ${target}`);
+  }
+}
+if (selected) {
+  const known = new Set(mutations.map(({ id }) => id));
+  const unknown = [...selected].filter((id) => !known.has(id));
+  if (unknown.length) throw new Error(`unknown mutation selection: ${unknown.join(",")}`);
+}
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-round3-mutations."));
 const results = [];
@@ -485,25 +529,33 @@ try {
     });
     const specimenTmp = path.join(specimen, ".mutation-tmp");
     fs.mkdirSync(specimenTmp, { mode: 0o700 });
+    const baseline = runTarget(specimen, specimenTmp, mutation);
+    if (baseline.status !== 0) {
+      throw new Error(`${mutation.id} baseline target is not green\n${baseline.error?.message ?? ""}${baseline.stdout}${baseline.stderr}`);
+    }
+    fs.rmSync(specimenTmp, { recursive: true, force: true });
+    fs.mkdirSync(specimenTmp, { mode: 0o700 });
     mutation.mutate(specimen);
     const refreshed = spawnSync(node, ["providers/codex/tools/refresh-manifest.mjs"], {
       cwd: specimen, encoding: "utf8", timeout: 30_000,
     });
     if (refreshed.status !== 0) throw new Error(`${mutation.id} manifest refresh failed: ${refreshed.stdout}${refreshed.stderr}`);
-    const test = spawnSync(node, ["--test", `--test-name-pattern=${mutation.target}`, ...mutation.files], {
-      cwd: specimen, encoding: "utf8", timeout: 90_000, maxBuffer: 20 * 1024 * 1024,
-      env: {
-        ...process.env,
-        CODEX_KIJITO_NODE: node,
-        TMPDIR: specimenTmp,
-        TMP: specimenTmp,
-        TEMP: specimenTmp,
-      },
-    });
+    const test = runTarget(specimen, specimenTmp, mutation);
     const output = `${test.stdout}${test.stderr}`;
-    const red = test.status !== 0 && targetFailed(output, mutation.target);
-    results.push({ id: mutation.id, claim: mutation.claim, targetedAssertion: mutation.target, manifestRefreshed: true, red, exit: test.status });
-    if (!red) throw new Error(`${mutation.id} did not fail at targeted assertion ${mutation.target}\n${output.slice(-6000)}`);
+    const red = test.status !== 0 && targetFailed(output, mutation.target, mutation.expectedFailure);
+    results.push({
+      id: mutation.id,
+      claim: mutation.claim,
+      targetedTest: mutation.target,
+      expectedFailure: mutation.expectedFailure ?? null,
+      baselineGreen: true,
+      manifestRefreshed: true,
+      red,
+      exit: test.status,
+    });
+    if (!red) {
+      throw new Error(`${mutation.id} did not fail with its expected evidence in ${mutation.target}\n${test.error?.message ?? ""}${output.slice(-6000)}`);
+    }
     fs.rmSync(specimen, { recursive: true, force: true });
   }
   process.stdout.write(`${JSON.stringify({ status: "PASS", count: results.length, results }, null, 2)}\n`);

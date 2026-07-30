@@ -498,8 +498,13 @@ async function main() {
   if (result?.status === "RED" || result?.wake?.status === "RED") process.exitCode = 1;
 }
 
-if (process.argv[1]
-  && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+function isDirectExecution(argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try { return fs.realpathSync(argv1) === fs.realpathSync(fileURLToPath(import.meta.url)); }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
+
+if (isDirectExecution()) {
   main().catch((error) => {
     const command = process.argv[2] ?? "status";
     const result = doctorFailure(null, error, command);
