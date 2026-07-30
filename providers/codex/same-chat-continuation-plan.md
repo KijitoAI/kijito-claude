@@ -1,9 +1,13 @@
 # Codex same-chat continuation plan
 
-Status: **PLAN ONLY.** Two consecutive Assay-CLEAN reviews of one unchanged plan digest open N0
-only. After that gate, disposable probe harnesses and any separately reviewed provider-neutral claim
-API may be built. N0-N3 and Jason's explicit risk/cost acceptance must pass before an installable
-Codex continuation provider may be implemented, installed, migrated, or enabled.
+Status: **PLAN ONLY.**
+
+**AUTHORITY:** Two consecutive Assay-CLEAN reviews of this exact plan digest open N0a/N0b only.
+GREEN N0 then authorizes disposable test-persona probes of the current N1-N3 surfaces, but no
+Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate
+provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews
+before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3
+are GREEN and Jason explicitly accepts N3.
 
 Owner: Codex provider lane. River owns repository integration and any production cutover. Assay owns
 independent plan review. Jason owns residual-risk and measured-cost acceptance.
@@ -59,10 +63,11 @@ these:
    exposes UI management. No lifecycle hooks, LaunchAgent, hidden second consumer, heuristic thread
    discovery, or ordinary Codex config/auth mutation.
 
-The 90-second SLO measures run creation while the lane is idle. Discovery must finish within 15
-seconds. A simple informational disposition must commit within 90 seconds after run start. A work
-slice is capped at 45 seconds and records durable progress for the next tick; it never extends a
-lease invisibly. This is polling continuation, not event-driven transport parity with Claude Monitor.
+The 90-second SLO measures run creation while the lane is idle. Each discovery slice stops within 15
+seconds and either finishes or persists drain progress. A simple informational disposition must commit
+within 90 seconds after run start. A work slice is capped at 45 seconds; one message may use at most
+ten slices or ten elapsed minutes before it records `REQUIRES_USER`. This is polling continuation,
+not event-driven transport parity with Claude Monitor.
 
 ## 3. Supported-surface decision
 
@@ -139,25 +144,37 @@ Unread is presentation metadata, not the ledger.
 
 1. Read `CODEX_CONTINUATION_CHECKPOINT_V1` for persona `codex`.
 2. Fetch newest inbox with `unread_only=false, mark_read=false`.
-3. Page backward with `before_id` until the completed checkpoint or mailbox start.
-4. One tick may issue at most 256 inbox requests, inspect at most 10,000 unique IDs, and accept at
-   most 32 MiB of decoded bodies. Hitting any bound yields `BLOCKED_BACKLOG`; it never looks empty.
+3. Page backward with `before_id` until the completed checkpoint or mailbox start. A new scan freezes
+   its newest observed ID as `scan_upper_id`; later arrivals belong to the final repoll/next scan.
+4. One tick stops at the earliest of 15 seconds, 256 inbox requests, 10,000 new unique IDs, or 32 MiB
+   of decoded bodies. It atomically persists `scan_upper_id`, next `before_id`, verified ID/range
+   segments, bytes, and start time as `DRAINING_BACKLOG`; it never looks empty or restarts from newest.
+   The next tick resumes that cursor. Once it reaches the checkpoint/mailbox start, it drains the
+   verified pending IDs in ascending order across bounded ticks before beginning another scan.
 5. Repoll newest after the backward walk so concurrent arrivals are not stranded.
 6. Sort IDs above the completed checkpoint ascending and exact-refetch each with
    `before_id=<id+1>, limit=1, unread_only=false, mark_read=false`.
 7. ID gaps are allowed only when every page's strict ordering and continuation metadata bridge them;
    the exact target still must be returned. Missing exact ID, truncated body, contradictory paging,
-   missing provenance, or unbridgeable gap is `BLOCKED_ROW(<id>)` and cannot advance the checkpoint.
+   missing provenance, corrupt persisted scan state, or unbridgeable gap is
+   `BLOCKED_ROW(<id>)` and cannot advance the checkpoint.
 
 This finds 2630 even though it is already read and remains correct when another consumer marks rows
 read during the walk.
 
 ### Claim, work intent, disposition, acknowledgment
 
-The current hosted `kijito_hive_claim` is an account claim with a 60-second default lease (maximum
-five minutes) and no plan-proven holder-bound renewal/fencing contract. A one-minute scheduled cadence
+The current hosted `kijito_hive_claim` is an account claim with a 60-second default lease and no
+plan-proven holder-bound renewal/fencing contract. A one-minute scheduled cadence
 can therefore outlive and lawfully steal a predecessor's lease. It is not accepted as the continuation
 transaction merely because two simultaneous callers produce one winner.
+
+`CODEX_CONTINUATION_CHECKPOINT_V1` contains schema version, persona, armed task/chat ID, project/
+worktree/environment identity, permission profile, prompt digest, last completed ID, scan upper ID/
+cursor/verified ranges/pending IDs/byte count, optional active message ID/holder token/fence/lease
+expiry/intent, disposition and slice count/deadline, native run/turn ID, pointer ID/digest, last
+successful heartbeat, last acknowledgment, and current health state/reason. Unknown/missing fields
+fail closed; doctor compares these exact fields rather than an informal identity claim.
 
 N1 must either prove a stronger existing surface or independently gate a minimal provider-neutral
 `CONTINUATION_CLAIM_V1` surface before any Codex implementation. That surface must atomically return a
@@ -167,13 +184,17 @@ message_id)`. The work slice remains 45 seconds; a renewal failure stops before 
 claim becomes stale only after server time passes `lease_expires_at`; expiry permits a new discovery
 owner but never proves a prior external side effect did not happen.
 
-Before any mutation, the holder atomically writes an intent containing message ID, fence, native run
+Jason owns the work envelope by writing it in the current request or current-state pointer before the
+row arrives; mail cannot create or widen it. Before any mutation, the holder atomically writes an
+intent containing message ID, fence, native run
 ID, action kind/target, input digest, idempotency key, expected pre-state digest, and reconciliation
 method. The mutation must either accept that idempotency/fence or produce independently readable
 before/after evidence. If neither is possible, the run records `REQUIRES_USER` and does not perform it.
 After action, the holder records the provider receipt/output digest, exact-refetches `M`, and commits
 `completed_id=M` plus disposition in the same fenced checkpoint transition. That commit is the ack.
-Only then may it exact-refetch with `mark_read=true` as a courtesy. A crash reconciles intent against
+It then releases/clears the exact claim and only afterward may exact-refetch with `mark_read=true` as
+a courtesy. Release failure records `CLAIM_RELEASE_FAILED`, blocks new action, and retries only the
+idempotent release/reconciliation path; it never repeats disposition. A crash reconciles intent against
 the external receipt/state; it never retries solely because the lease expired. If the 45-second work
 slice ends before disposition, the holder atomically records `DEFERRED` progress and reconciliation
 state, releases its lease, and leaves `completed_id` unchanged. No action occurs after release.
@@ -188,8 +209,9 @@ There is no assumed programmatic Scheduled management API.
   procedure; another chat requires cutover first.
 - **Doctor:** a read-only verifier outside the scheduled run reads the recorded rollout/run artifact,
   checkpoint/claim state, and hosted heartbeat. It reports ARMED only while successful native runs
-  continue within two cadences and every identity field matches. It reports `BLOCKED_BACKLOG`,
-  `BLOCKED_ROW(id)`, `AMBIGUOUS_ACTION(id)`, `LEGACY_CONSUMER`, `STALE`, or `INACTIVE` explicitly.
+  continue within two cadences and every identity field matches. It reports `DRAINING_BACKLOG`,
+  `BLOCKED_ROW(id)`, `AMBIGUOUS_ACTION(id)`, `CLAIM_RELEASE_FAILED`,
+  `LEGACY_CONSUMER`, `STALE`, or `INACTIVE` explicitly.
   It never claims that a UI task exists/enabled from self-report alone.
 - **Blocked-row escape:** automatic skipping is forbidden. An attended operator may repair/resend the
   row or exact-quarantine one ID with reason and signed operator decision. Quarantine writes a durable
@@ -203,6 +225,9 @@ There is no assumed programmatic Scheduled management API.
 N0b must probe the complete attended create, inspect, pause, resume, and delete path plus quotas,
 expiry, cadence limits, locked/background behavior, and recent-run evidence. If the installed product
 cannot expose enough evidence for doctor, the candidate is RED rather than papered over by a command.
+If the Scheduled record is UI-only, its attended capture is setup evidence; mechanized doctor uses
+the immutable rollout plus hosted heartbeat and lets ARMED expire within two missed cadences. It does
+not pretend to read an unsupported management API.
 
 ## 7. Legacy cutover ownership and rollback
 
@@ -225,10 +250,15 @@ The rollback never runs two consumers concurrently and never treats `mark_read` 
 
 ## 8. Pre-implementation gates
 
-Only two consecutive Assay-CLEAN reviews of one unchanged digest open these gates. Disposable probes
-use a dedicated test persona, never persona `codex`, except N0a's explicitly read-only
-`mark_read=false` capability peek. N0-N3 do not authorize an installable provider until all are GREEN
-and Jason accepts N3.
+**AUTHORITY:** Two consecutive Assay-CLEAN reviews of this exact plan digest open N0a/N0b only.
+GREEN N0 then authorizes disposable test-persona probes of the current N1-N3 surfaces, but no
+Codex-provider or Kijito-server implementation. If N1 rejects the current API, a separate
+provider-neutral claim-API plan owned by River must receive two consecutive Assay-CLEAN reviews
+before any claim-API code is written. An installable Codex provider remains forbidden until N0-N3
+are GREEN and Jason explicitly accepts N3.
+
+Disposable probes use a dedicated test persona, never persona `codex`, except N0a's explicitly
+read-only `mark_read=false` capability peek.
 
 ### N0a — native same-chat, collision, and unattended capability
 
@@ -239,8 +269,9 @@ turn/run ID, nonce, cwd/project/worktree, model, sandbox, approval and permissio
 
 - after a completed manual turn;
 - while a manual turn is still active, proving the scheduled input queues and never uses steering;
-- with two scheduled firings made to overlap, proving only one run acts and the other reports/records
-  a collision without entering the turn;
+- with two disposable in-chat tasks synchronized to one minute boundary while the first waits on a
+  disposable 75-second barrier, forcing overlap and proving only one run acts while the other records
+  a collision without steering or disposition;
 - while the app is backgrounded and Jason has been inactive for ten minutes;
 - once while the screen is locked, with computer awake and app running.
 
@@ -261,7 +292,8 @@ cannot distinguish enabled from stale/disabled, N0b is RED.
 
 ### N1 — fenced checkpoint transaction
 
-Test the exact chosen API, not a mock. Two concurrent claimers yield one holder token/fence. Keep one
+Test the exact chosen API, not a mock. This synthetic lease-duration probe is exempt from the 45-second
+production work-slice limit. Two concurrent claimers yield one holder token/fence. Keep one
 holder alive past 60 seconds and two schedule cadences; a contender cannot steal it. Stop renewal and
 prove takeover only after the 180-second server deadline with a larger fence. The old holder then
 cannot write intent, renew, commit, or acknowledge. Crash before intent, after intent, after external
@@ -276,7 +308,8 @@ rows are found; another consumer marks rows read during every paging phase; arri
 caught by final repoll; exact fetch returns the intended ID; oversized/truncated/missing/provenance-bad
 content blocks discovery and makes doctor RED; no later row advances; repair and operator-quarantine
 each recover only the exact blocked ID; checkpoint ack and courtesy `mark_read` affect only the intended
-row. Exercise all declared request/ID/byte bounds and require `BLOCKED_BACKLOG`, never false empty.
+row. Exercise the 15-second/request/ID/byte bounds, require persisted `DRAINING_BACKLOG`, resume from
+the saved cursor across ticks, and drain the entire backlog once without false empty or duplicate work.
 
 ### N3 — measured cost, compaction, interference, and risk acceptance
 
@@ -321,22 +354,23 @@ These specify QA; they are not implementation permission.
 
 ## 10. Plan QA and independent gate
 
-Author preflight is useful but never counts toward the two-review bar. On one digest it must:
+Author preflight is presence-only lint and never counts toward the two-review bar. On one digest it
+must:
 
 1. trace every outcome clause and every Assay L1-L10 finding to a named N/G assertion;
-2. attempt false passes using a dedicated/lookalike thread, self-reported identity, manual prompt,
+2. require named rejection text for dedicated/lookalike thread, self-reported identity, manual prompt,
    chat-only “work,” unread-only lookup, expired lease, stale writer, poison row under ARMED, second
    consumer, hostile authority text, disabled task, and summary-only turn;
-3. reproduce the checks, not only the plan digest, with unique expected-failure markers.
+3. emit unique lint markers. It constructs no specimen and is not semantic review evidence.
 
 After preflight, commit/push the plan-only branch and send Assay the exact returned commit SHA plus
-plan digest. A load-bearing finding changes the digest and resets the Assay count. Two consecutive
-Assay-CLEAN reviews must use the exact unchanged digest. Only then may N0 begin. N0-N3 must still pass
-before implementation; clean plan review is not implementation approval.
+plan digest. A load-bearing finding changes the digest and resets the Assay count. The AUTHORITY
+statement in the status and section 8 is the complete post-review boundary.
 
 ## 11. Non-goals and exit
 
-No withdrawn-controller migration; no instant/event-driven claim for polling; no universal transport;
+No use of the withdrawn controller's upgrade/migration path; section 7 alone governs checkpoint
+cutover. No instant/event-driven claim for polling; no universal transport;
 no autonomy outside an explicitly armed chat and existing authority; no mail-as-command authority;
 no merge/publish/production change during plan approval.
 

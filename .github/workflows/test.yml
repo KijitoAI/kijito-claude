@@ -38,6 +38,9 @@ jobs:
       - name: shared doctrine across every provider
         run: bash tests/conformance_test.sh --selftest
 
+      - name: codex same-chat plan author lint
+        run: providers/codex/test/same-chat-plan-preflight.sh
+
       - name: codex controller + packaging suites
         run: |
           node --test providers/codex/test/codex-hive-watch.test.mjs \
