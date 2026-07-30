@@ -2,7 +2,7 @@
 
 Plan: [`same-chat-continuation-plan.md`](same-chat-continuation-plan.md)
 
-Plan SHA-256: `b6d2537f66a6ba76aa8e4414ba486b3784303c2b7d501ba1166e505ae39912e1`
+Plan SHA-256: `7e9b19a1678878f847075f8bd5470b75f0741d9168b166bf9a3f2f90b8faede9`
 
 Scope: presence-only author lint. It constructs no behavioral specimen and contributes **zero** to
 the required Assay reviews. No capability probe, provider/server implementation, installation,
@@ -26,7 +26,25 @@ migration, or production change is represented here.
 - Calibration: nine of ten round-1 findings closed REAL; exact-chat identity evidence independently
   validated against the app-owned rollout and historical 2630 lookalike.
 
+### Round 3
+
+- Frozen commit: `bdf4701cff554aa3e2343f0b0a3fcdffd35fe61e`
+- Plan digest: `b6d2537f66a6ba76aa8e4414ba486b3784303c2b7d501ba1166e505ae39912e1`
+- Verdict: **NOT CLEAN — 0/2, one load-bearing item**
+- Review: `QA/reviews/PR6-same-chat-plan-round3-bdf4701.md` at `59b22d5`
+- Calibration: every round-2 load-bearing item closed REAL; the remaining `REQUIRES_USER` lifecycle
+  defect entered through the new multi-slice bound.
+
 This revision changes the plan digest; no review count carries forward.
+
+## Cumulative author disclosures
+
+The round-2 author record remains archived at commit `0f6ed7ef9b94b2d24ddd10cc7896b2d233450f59`.
+Before that digest froze, author review disclosed and corrected three defects: the claim-API gate
+deadlock, missing durable `DEFERRED`/release semantics, and unsafe use of the live `codex` persona for
+synthetic probes. The round-1 CI-red/revert caused by stale historical-plan provenance remains visible
+in git history. The superseded provenance digest was
+`b1fc0953d94b1e9712097dd382b32360d57f09815cc47a3be591c8000c819537`.
 
 ## Round-1 trace retained
 
@@ -68,6 +86,33 @@ This revision changes the plan digest; no review count carries forward.
 - Author lint falls back to `grep -F` when `rg` is absent and now runs in CI.
 - N1 labels the long lease-duration test synthetic and exempt from the production slice limit.
 - Per-message disposition is bounded to ten slices or ten minutes before `REQUIRES_USER`.
+
+## Round-4 closure matrix
+
+| Round-3 item | Closure in this digest |
+|---|---|
+| N-1 `REQUIRES_USER` lifecycle | It is a fenced terminal disposition: commits `completed_id=M`, releases the claim, blocks ARMED/later work, never rediscovers `M`, and clears only through a signed attended resolution. |
+| N-2 undefined `AMBIGUOUS_ACTION` | Defined as irreconcilable intent/effect evidence; leaves `completed_id` below `M`, releases, blocks discovery/ARMED without replay, and requires evidence-backed commit or signed exact quarantine. |
+| N-3 terminal claim release | Success, `REQUIRES_USER`, ambiguity, `DEFERRED`, and quarantine all release; any failure enters bounded/escapable `CLAIM_RELEASE_FAILED(M)` without repeated action. |
+| N-4 release-failure escape | Doctor stays RED while idempotent release/absence checks run; server-proven expiry/absence or attended exact-holder release clears it. |
+| N-5 dispatcher authorization surface | Root `install.sh` comments label the Codex notifier withdrawn and direct users to skills-only. |
+| N-6 cumulative disclosures | This record links the round-2 artifact, retains its three author-found defects, and preserves the superseded provenance digest. |
+| N-7 stale L1-L10 QA wording | Section 10 and lint now require all accumulated independent load-bearing findings, not one historical enumeration. |
+
+The full six-line canonical authority paragraph is counted line-by-line in both plan locations and
+this record. N0a labels its 75-second barrier synthetic and exempt from the production slice cap.
+
+## Five-point runtime-state check
+
+| Runtime state/bound | Doctor | Outcome 8 | Checkpoint | Probe | `completed_id` effect and escape |
+|---|---|---|---|---|---|
+| `DRAINING_BACKLOG` | enumerated | blocks ARMED | scan cursor/ranges/bytes | N2 | unchanged; bounded next-tick resume/drain |
+| `BLOCKED_ROW(id)` | enumerated | blocks ARMED | health reason + exact ID | N2 | below ID; repair or signed exact quarantine |
+| ten-slice/ten-minute bound → `REQUIRES_USER(id)` | enumerated | blocks ARMED | slices/deadline/reason/resolution | N1 | commits ID once; signed attended resolution, never reopen ID |
+| `AMBIGUOUS_ACTION(id)` | enumerated | blocks ARMED | intent + ambiguity evidence/resolution | N1 | below ID; evidence-backed commit or signed quarantine |
+| `CLAIM_RELEASE_FAILED(id)` | enumerated | blocks ARMED | holder/lease/health reason | N1 | preserves prior choice; proven expiry/absence or attended exact release |
+
+Every row has all five entries. This table is static author lint, not behavioral proof.
 
 ## Canonical post-review authority
 
@@ -115,11 +160,12 @@ execute the mechanism, or review semantics.
 
 ## Author lint result (non-counting)
 
-- Timestamp: `2026-07-30T19:40:00Z`
-- Plan digest: `b6d2537f66a6ba76aa8e4414ba486b3784303c2b7d501ba1166e505ae39912e1`
+- Timestamp: `2026-07-30T20:02:51Z`
+- Plan digest: `7e9b19a1678878f847075f8bd5470b75f0741d9168b166bf9a3f2f90b8faede9`
 - False-pass text markers: **10/10 present**
-- Assay finding traces: **L1-L10 present**
-- Supersession surfaces: **provider/root README, installer, parity plan, PR disposition present**
+- Independent finding traces: **20/20 present (L1-L10, LB-1..LB-7, N-1..N-3)**
+- Runtime-state five-point rows: **5/5 complete**
+- Supersession surfaces: **provider/root README, provider/root installer, parity plan, PR disposition present**
 - Provider conformance: **59/59 GREEN**
 - Controller/release regression suites: **17/17 GREEN**
 - `git diff --check`: **GREEN**
@@ -145,6 +191,6 @@ checks only; they do not reproduce an independent semantic plan review.
 ## Next gate
 
 Freeze/push one consolidated plan-and-supersession-fence revision, wait for CI, then send Assay the
-exact Git-returned full commit SHA and plan digest for round 3. The independent count remains 0/2 until a CLEAN review;
-two consecutive CLEAN reviews must use one exact unchanged digest. The canonical AUTHORITY paragraph
-above is the only post-review permission statement.
+exact Git-returned full commit SHA and plan digest for round 4. The independent count remains 0/2 until
+a CLEAN review; two consecutive CLEAN reviews must use one exact unchanged digest. The canonical
+AUTHORITY paragraph above is the only post-review permission statement.

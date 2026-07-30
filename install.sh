@@ -5,10 +5,10 @@
 # PROVIDER under providers/, owns its own installer, and installs to its own location:
 #
 #   claude  (default)  providers/claude/install.sh    → ~/.claude          — bash scripts + skills
-#   codex              providers/codex/install.mjs    → ~/.local/share/…   — Node wake controller
+#   codex              providers/codex/install.mjs    → WITHDRAWN notifier; skills-only remains safe
 #
 #   ./install.sh                      # claude, unchanged from before the providers/ split
-#   ./install.sh --provider codex     # codex
+#   ./install.sh --provider codex     # WITHDRAWN; use only with --skills-only
 #   ./install.sh --list-providers
 #
 # ⚠️ THE DEFAULT IS LOAD-BEARING AND MUST STAY `claude`. `npx kijito-claude` and

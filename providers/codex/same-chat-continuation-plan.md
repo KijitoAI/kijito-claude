@@ -57,8 +57,9 @@ these:
    acknowledgment or delivery ledger. A crash before commit is recoverable; duplicate runs cannot
    duplicate disposition.
 8. ARMED requires independently verifiable native-run evidence, recent hosted-Kijito heartbeat,
-   valid claim/checkpoint ownership, and no blocking discovery or ambiguous action. A process,
-   schedule listing, self-report, or old GREEN result alone is insufficient.
+   valid claim/checkpoint ownership, and none of `DRAINING_BACKLOG`, `BLOCKED_ROW(id)`,
+   `REQUIRES_USER(id)`, `AMBIGUOUS_ACTION(id)`, or `CLAIM_RELEASE_FAILED(id)`. A process, schedule
+   listing, self-report, or old GREEN result alone is insufficient.
 9. Pause, stop, uninstall, rollback, and migration are explicit and attended where the provider only
    exposes UI management. No lifecycle hooks, LaunchAgent, hidden second consumer, heuristic thread
    discovery, or ordinary Codex config/auth mutation.
@@ -66,8 +67,8 @@ these:
 The 90-second SLO measures run creation while the lane is idle. Each discovery slice stops within 15
 seconds and either finishes or persists drain progress. A simple informational disposition must commit
 within 90 seconds after run start. A work slice is capped at 45 seconds; one message may use at most
-ten slices or ten elapsed minutes before it records `REQUIRES_USER`. This is polling continuation,
-not event-driven transport parity with Claude Monitor.
+ten slices or ten elapsed minutes before it records the terminal `REQUIRES_USER` disposition defined
+in section 5. This is polling continuation, not event-driven transport parity with Claude Monitor.
 
 ## 3. Supported-surface decision
 
@@ -149,8 +150,9 @@ Unread is presentation metadata, not the ledger.
 4. One tick stops at the earliest of 15 seconds, 256 inbox requests, 10,000 new unique IDs, or 32 MiB
    of decoded bodies. It atomically persists `scan_upper_id`, next `before_id`, verified ID/range
    segments, bytes, and start time as `DRAINING_BACKLOG`; it never looks empty or restarts from newest.
-   The next tick resumes that cursor. Once it reaches the checkpoint/mailbox start, it drains the
-   verified pending IDs in ascending order across bounded ticks before beginning another scan.
+   `completed_id` remains unchanged. The next tick resumes that cursor. Once it reaches the
+   checkpoint/mailbox start, it drains the verified pending IDs in ascending order across bounded
+   ticks before beginning another scan.
 5. Repoll newest after the backward walk so concurrent arrivals are not stranded.
 6. Sort IDs above the completed checkpoint ascending and exact-refetch each with
    `before_id=<id+1>, limit=1, unread_only=false, mark_read=false`.
@@ -172,9 +174,10 @@ transaction merely because two simultaneous callers produce one winner.
 `CODEX_CONTINUATION_CHECKPOINT_V1` contains schema version, persona, armed task/chat ID, project/
 worktree/environment identity, permission profile, prompt digest, last completed ID, scan upper ID/
 cursor/verified ranges/pending IDs/byte count, optional active message ID/holder token/fence/lease
-expiry/intent, disposition and slice count/deadline, native run/turn ID, pointer ID/digest, last
-successful heartbeat, last acknowledgment, and current health state/reason. Unknown/missing fields
-fail closed; doctor compares these exact fields rather than an informal identity claim.
+expiry/intent, disposition and slice count/deadline, ambiguity evidence, operator-resolution record,
+native run/turn ID, pointer ID/digest, last successful heartbeat, last acknowledgment, and current
+health state/reason including the exact blocked message ID. Unknown/missing fields fail closed; doctor
+compares these exact fields rather than an informal identity claim.
 
 N1 must either prove a stronger existing surface or independently gate a minimal provider-neutral
 `CONTINUATION_CLAIM_V1` surface before any Codex implementation. That surface must atomically return a
@@ -186,18 +189,43 @@ owner but never proves a prior external side effect did not happen.
 
 Jason owns the work envelope by writing it in the current request or current-state pointer before the
 row arrives; mail cannot create or widen it. Before any mutation, the holder atomically writes an
-intent containing message ID, fence, native run
-ID, action kind/target, input digest, idempotency key, expected pre-state digest, and reconciliation
-method. The mutation must either accept that idempotency/fence or produce independently readable
-before/after evidence. If neither is possible, the run records `REQUIRES_USER` and does not perform it.
+intent containing message ID, fence, native run ID, action kind/target, input digest, idempotency key,
+expected pre-state digest, and reconciliation method. The mutation must either accept that
+idempotency/fence or produce independently readable
+before/after evidence. If neither is possible, the run takes the `REQUIRES_USER` terminal path below
+and does not perform it.
+
 After action, the holder records the provider receipt/output digest, exact-refetches `M`, and commits
 `completed_id=M` plus disposition in the same fenced checkpoint transition. That commit is the ack.
 It then releases/clears the exact claim and only afterward may exact-refetch with `mark_read=true` as
-a courtesy. Release failure records `CLAIM_RELEASE_FAILED`, blocks new action, and retries only the
-idempotent release/reconciliation path; it never repeats disposition. A crash reconciles intent against
-the external receipt/state; it never retries solely because the lease expired. If the 45-second work
-slice ends before disposition, the holder atomically records `DEFERRED` progress and reconciliation
-state, releases its lease, and leaves `completed_id` unchanged. No action occurs after release.
+a courtesy. Release failure enters `CLAIM_RELEASE_FAILED(M)` under the rules below. A crash reconciles
+intent against the external receipt/state; it never retries solely because the lease expired. If the
+45-second work slice ends before disposition, the holder atomically records `DEFERRED` progress and
+reconciliation state, releases its lease, and leaves `completed_id` unchanged. No action occurs after
+release.
+
+`REQUIRES_USER(M)` is a fenced terminal disposition, not a retry state. Whether caused by an unsafe
+adapter or the ten-slice/ten-minute bound, it records reason, progress, intent/receipt evidence, and
+operator choices; atomically commits `completed_id=M`; then releases the exact claim. It blocks all
+later automatic work and ARMED health without rediscovering or re-executing `M`. An attended operator
+escapes it by writing one signed resolution: accept/decline the disposition, repair the external state,
+or narrow/extend the pre-registered envelope and resend as a new higher-ID row. Clearing the health
+block requires that resolution and never reopens `M`.
+
+`AMBIGUOUS_ACTION(M)` means crash reconciliation cannot prove whether the recorded intent produced an
+external effect. It records the contradictory/missing evidence, leaves `completed_id` below `M`,
+releases the exact claim, and blocks discovery, later work, and ARMED health without attempting the
+effect again. An attended operator must supply independently readable evidence that lets the fenced
+checkpoint, under a fresh higher holder/fence for `M`, either commit `M` once or exact-quarantine `M`
+with a signed decision; only then may the block clear. Quarantine and `REQUIRES_USER` release their
+exact claim after their fenced commit.
+
+Any release failure enters `CLAIM_RELEASE_FAILED(M)`. It preserves the already-chosen
+`completed_id` effect, performs only idempotent release/server-absence checks, and remains doctor-RED.
+It clears automatically only when server time proves the lease expired or the exact holder is absent;
+an attended operator may exact-release the verified holder. Neither recovery repeats disposition or
+external action. Clearing this release substate restores any underlying `REQUIRES_USER`, ambiguity,
+or deferred/committed checkpoint state and forces doctor to re-evaluate every ARMED requirement.
 
 ## 6. Health and attended lifecycle
 
@@ -210,13 +238,15 @@ There is no assumed programmatic Scheduled management API.
 - **Doctor:** a read-only verifier outside the scheduled run reads the recorded rollout/run artifact,
   checkpoint/claim state, and hosted heartbeat. It reports ARMED only while successful native runs
   continue within two cadences and every identity field matches. It reports `DRAINING_BACKLOG`,
-  `BLOCKED_ROW(id)`, `AMBIGUOUS_ACTION(id)`, `CLAIM_RELEASE_FAILED`,
+  `BLOCKED_ROW(id)`, `REQUIRES_USER(id)`, `AMBIGUOUS_ACTION(id)`, `CLAIM_RELEASE_FAILED(id)`,
   `LEGACY_CONSUMER`, `STALE`, or `INACTIVE` explicitly.
   It never claims that a UI task exists/enabled from self-report alone.
 - **Blocked-row escape:** automatic skipping is forbidden. An attended operator may repair/resend the
   row or exact-quarantine one ID with reason and signed operator decision. Quarantine writes a durable
   tombstone/disposition, preserves body digest/provenance where available, advances only that exact
-  ID under the claim fence, and leaves doctor RED until the operator confirms recovery.
+  ID under the claim fence, and releases the exact claim. The signed decision is the recovery
+  confirmation; successful commit/release clears that exact block. Release failure follows the path
+  above.
 - **Pause/uninstall:** the attended operator disables or deletes the exact task in **Scheduled** and
   verifies no run for two cadences. Uninstall then removes only manifest-owned checkpoint artifacts
   after identity/ownership verification. No hooks, LaunchAgents, ordinary auth/config edits, or UI
@@ -271,7 +301,8 @@ turn/run ID, nonce, cwd/project/worktree, model, sandbox, approval and permissio
 - while a manual turn is still active, proving the scheduled input queues and never uses steering;
 - with two disposable in-chat tasks synchronized to one minute boundary while the first waits on a
   disposable 75-second barrier, forcing overlap and proving only one run acts while the other records
-  a collision without steering or disposition;
+  a collision without steering or disposition; this synthetic overlap probe is exempt from the
+  45-second production work-slice cap;
 - while the app is backgrounded and Jason has been inactive for ten minutes;
 - once while the screen is locked, with computer awake and app running.
 
@@ -300,6 +331,9 @@ cannot write intent, renew, commit, or acknowledge. Crash before intent, after i
 effect, and after commit; each reconciles without duplicate side effect. A non-idempotent adapter
 without intent+receipt reconciliation is refused. If this requires `CONTINUATION_CLAIM_V1`, its API,
 threat model, tests, and independent review are a separate provider-neutral prerequisite.
+Force both causes of `REQUIRES_USER`, an irresolvable receipt into `AMBIGUOUS_ACTION`, and release
+failure after success/terminal/quarantine commits. Assert each state's checkpoint and `completed_id`
+effect, doctor/ARMED block, no-repeat behavior, and automatic or attended escape.
 
 ### N2 — exact durable-row retrieval and blocked recovery
 
@@ -357,15 +391,21 @@ These specify QA; they are not implementation permission.
 Author preflight is presence-only lint and never counts toward the two-review bar. On one digest it
 must:
 
-1. trace every outcome clause and every Assay L1-L10 finding to a named N/G assertion;
+1. trace every outcome clause and every accumulated independent load-bearing finding to a named N/G
+   assertion;
 2. require named rejection text for dedicated/lookalike thread, self-reported identity, manual prompt,
    chat-only “work,” unread-only lookup, expired lease, stale writer, poison row under ARMED, second
    consumer, hostile authority text, disabled task, and summary-only turn;
 3. emit unique lint markers. It constructs no specimen and is not semantic review evidence.
 
-After preflight, commit/push the plan-only branch and send Assay the exact returned commit SHA plus
-plan digest. A load-bearing finding changes the digest and resets the Assay count. The AUTHORITY
-statement in the status and section 8 is the complete post-review boundary.
+For every runtime state or production execution bound added by a revision, the author lint record must
+explicitly trace five properties: doctor enumeration, outcome 8 ARMED effect, checkpoint fields, a
+named N/G probe, and the `completed_id` effect plus automatic/attended escape. Missing any one is RED
+before freeze.
+
+After preflight, commit/push the plan-and-supersession-fence branch and send Assay the exact returned
+commit SHA plus plan digest. A load-bearing finding changes the digest and resets the Assay count. The
+AUTHORITY statement in the status and section 8 is the complete post-review boundary.
 
 ## 11. Non-goals and exit
 
