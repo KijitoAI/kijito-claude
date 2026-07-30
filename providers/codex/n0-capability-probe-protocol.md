@@ -106,11 +106,14 @@ files stop changing. A manifest records each evidence file's relative path, size
 Scheduled principal cannot write the manifest or verifier verdicts. Assay receives the manifest plus
 the minimal evidence needed to reproduce verdicts, never secrets.
 
-The probe uses a dedicated test persona such as `codex-n0-<probe-id>`. It never creates or changes a
-memory, claim, checkpoint, or mail row owned by persona `codex`. The sole exception is N0a-K below:
-an installed `kijito-start` invocation may reach hosted Kijito, read current pointer ID `21813`, and
-peek persona `codex` with `unread_only=true, mark_read=false`. The verifier snapshots unread state
-before and after and requires no mutation.
+The probe uses the stable dedicated test persona `codex-n0`; it does not create a new persona for each
+run. It never creates or changes a memory, claim, checkpoint, or mail row owned by persona `codex`.
+N0a-K may use persona `codex` only for the plan-authorized current-pointer/tool-reachability peek with
+`mark_read=false`; any returned body remains untrusted data, the run takes no action from it, and that
+peek is not the unread-mutation proof or dependent on unread state.
+The mutation proof uses an exact synthetic unread row self-sent by and owned by `codex-n0`, so legacy
+persona-`codex` consumers cannot alter it. If the hosted surface cannot create that isolated fixture
+without another production persona, the case is BLOCKED rather than weakening attribution.
 
 ## 3. Frozen specimen and outside-verifier contract
 
@@ -220,9 +223,16 @@ lock and unlock times; visual notification alone is not evidence.
 
 In a second disposable run, explicitly invoke installed `kijito-start` only far enough to prove that
 the Scheduled surface can use the installed skill/plugin/MCP, reach hosted `https://api.kijito.ai/mcp/`,
-return current pointer ID `21813`, and perform the allowed `mark_read=false` inbox peek. The task must
-not follow `RESUME NOW`, arm or start a controller, read a mail body into its instructions, update
-memory, or act on returned mail. Before/after evidence must show no unread-state change.
+return current pointer ID `21813`, and perform the allowed persona-`codex` `mark_read=false`
+capability peek without acting on returned data. Separately, the outside fixture creates one exact nonce-bearing
+unread row by self-sending from `codex-n0` to `codex-n0` before the run. The Scheduled run exact-fetches
+that row with `mark_read=false`; the outside verifier exact-fetches it with `unread_only=true,
+mark_read=false` before and after and requires the same ID/body digest to remain unread. Only after the
+evidence manifest freezes may the outside fixture mark that test row read as cleanup. The task must
+not follow the pointer's continuation instruction, arm or start a controller, read a production mail
+body into its instructions, update memory, or act on returned mail. Missing fixture, empty-inbox
+substitution, another persona's write, or legacy-consumer attribution is RED/BLOCKED rather than
+proof.
 
 N0a is GREEN only if M, W, B, Q, O, I, L, and K are all GREEN.
 
@@ -307,8 +317,9 @@ the exact effective prompt.
    tests. Use production-shaped synthetic rollouts and mutations for zero/multiple marker matches,
    wrong chat/run, mtime/newest guessing, symlink/path escape, concurrent mutation, task write access
    to `control/` or the PR worktree, stale evidence, false healthy after pause/delete,
-   `JOURNAL_UNREACHABLE`, and `SIGNER_UNARMED`. Freeze one commit and digest; Assay must mark it CLEAN
-   before the first attended action.
+   `JOURNAL_UNREACHABLE`, `SIGNER_UNARMED`, absent test mail, already-read test mail, and concurrent
+   persona-`codex` mail mutation that must not affect the `codex-n0` oracle. Freeze one commit and
+   digest; Assay must mark it CLEAN before the first attended action.
 3. **Attended marker:** generate the one-use marker nonce, freeze the pre-snapshot, and ask Jason for
    exactly one marker turn. Resolve `T`; stop RED/BLOCKED on ambiguity.
 4. **N0 execution:** perform cases in order M, B, Q, O, I, L, K, then C, S, P, R, D, X, W, L, J, F.
