@@ -251,7 +251,7 @@ async function stop(manifest) {
   return { status: "STOPPED", pid: current.pid };
 }
 
-async function waitArmed(manifest, timeoutMs = 180_000, logOffset = 0) {
+export async function waitArmed(manifest, timeoutMs = 180_000, logOffset = 0) {
   const logFile = path.join(manifest.paths.runtime, "controller.ndjson");
   return waitFor(() => {
     let bytes;

@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { assertArmedHealth, lockStatus } from "../cli.mjs";
+import { assertArmedHealth, lockStatus, waitArmed } from "../cli.mjs";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const installer = path.join(packageRoot, "install.mjs");
@@ -200,7 +200,21 @@ test("sandbox EPERM process probe falls back to a fresh private heartbeat", () =
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("wait-armed requires live ARMED health, not a historical log plus INACTIVE state", () => {
+test("wait-armed rejects a historical armed log when the controller is stopped", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-historical-arm."));
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(runtime, "controller.ndjson"), `${JSON.stringify({
+    ts: "2026-07-30T04:00:00.000Z",
+    event: "armed",
+    threadId: "historical-thread",
+  })}\n`, { mode: 0o600 });
+  try {
+    await assert.rejects(waitArmed({ paths: { runtime } }, 100), /startup is not armed: INACTIVE/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("armed-health assertion accepts only ARMED", () => {
   assert.throws(() => assertArmedHealth({ status: "INACTIVE", reasons: [] }), /startup is not armed: INACTIVE/);
   assert.throws(() => assertArmedHealth({ status: "RED", reasons: ["ambiguous"] }), /ambiguous/);
   assert.equal(assertArmedHealth({ status: "ARMED", reasons: [] }).status, "ARMED");
