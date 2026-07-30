@@ -102,6 +102,16 @@ export function initialState(persona) {
     recentKeys: [],
     lastAttempt: null,
     ambiguous: null,
+    degraded: null,
+    recovery: null,
+    controllerPid: null,
+    startedAt: null,
+    stoppedAt: null,
+    armedAt: null,
+    heartbeatAt: null,
+    pendingSince: null,
+    lastRelevantEventAt: null,
+    lastSurfaceAt: null,
   };
 }
 

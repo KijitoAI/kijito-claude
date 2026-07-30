@@ -262,7 +262,7 @@ class AppServerClient {
     if (!started.turn?.id) throw new Error("turn/start acceptance missing turn id");
     const result = await terminal;
     if (result.method !== "turn/completed") throw new Error("wake turn failed");
-    await this.waitForIdle(30_000);
+    if (result.turnId && result.turnId !== started.turn.id) throw new Error("wake turn identity mismatch");
     return { turnId: started.turn.id, text: result.text, digest };
   }
 
@@ -274,7 +274,21 @@ class AppServerClient {
     if (proc.exitCode !== null || proc.signalCode !== null) return;
     const exited = new Promise((resolve) => proc.once("exit", resolve));
     proc.kill("SIGTERM");
-    await exited;
+    let timer;
+    const cleanExit = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), 5_000); }),
+    ]);
+    clearTimeout(timer);
+    if (cleanExit) return;
+    this.onLog({ event: "app-server-force-stop", reason: "SIGTERM timeout" });
+    proc.kill("SIGKILL");
+    const forcedExit = await Promise.race([
+      exited.then(() => true),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(false), 5_000); }),
+    ]);
+    clearTimeout(timer);
+    if (!forcedExit) throw new Error("app-server did not exit after SIGKILL");
   }
 
   rejectWaiters(error) {
@@ -303,7 +317,11 @@ export class HiveWakeController {
     this.seen = new Set(this.state.recentKeys);
     this.partial = Buffer.from(this.state.partialBase64 || "", "base64");
     this.timer = null;
+    this.heartbeatTimer = null;
+    this.recoveryTimer = null;
     this.busy = false;
+    this.recovering = false;
+    this.recoveryAttempts = 0;
     this.stopping = false;
     this.lock = null;
     this.client = null;
@@ -319,6 +337,9 @@ export class HiveWakeController {
     if ((durableDedupe && this.seen.has(item.key)) || this.pendingKeys.has(item.key)) return;
     this.pending.push(item);
     this.pendingKeys.add(item.key);
+    const now = new Date().toISOString();
+    this.state.pendingSince ??= now;
+    this.state.lastRelevantEventAt = now;
     if (this.pending.length > MAX_PENDING) {
       this.pending = [{ kind: "reconcile", id: null, key: "reconcile:overflow" }];
       this.pendingKeys = new Set(["reconcile:overflow"]);
@@ -406,7 +427,7 @@ export class HiveWakeController {
   }
 
   async flush() {
-    if (this.busy || this.stopping || this.pending.length === 0 || this.state.ambiguous) return;
+    if (this.busy || this.recovering || this.stopping || this.pending.length === 0 || this.state.ambiguous || this.state.degraded) return;
     if (this.client.status !== "idle") return;
     this.busy = true;
     const batch = this.pending.splice(0);
@@ -427,22 +448,38 @@ export class HiveWakeController {
       const mailIds = batch.filter((item) => item.trigger === "mail").map((item) => item.id);
       if (mailIds.length !== 0) this.state.lastMailId = Math.max(this.state.lastMailId, ...mailIds);
       for (const item of batch) if (item.trigger !== "reconcile") this.seen.add(item.key);
+      const surfacedAt = new Date().toISOString();
+      this.state.lastSurfaceAt = surfacedAt;
+      if (this.pending.length === 0) this.state.pendingSince = null;
       this.state.lastAttempt = attempt;
       this.persist();
       this.log({ event: "surfaced", threadId: this.client.threadId, ...result, batch: attempt.batch });
+      try {
+        if (typeof this.client.waitForIdle === "function") {
+          await this.client.waitForIdle(this.options.idleTimeoutMs ?? 30_000);
+        }
+      } catch (error) {
+        this.state.degraded = {
+          at: new Date().toISOString(),
+          reason: error.message,
+          phase: "post-surface-idle",
+          turnId: result.turnId,
+        };
+        this.persist();
+        this.log({ event: "degraded", ...this.state.degraded });
+      }
     } catch (error) {
       this.state.ambiguous = { at: new Date().toISOString(), reason: error.message, batch: attempt.batch };
       this.persist();
       this.log({ event: "ambiguous", reason: error.message, batch: attempt.batch });
     } finally {
       this.busy = false;
+      if (this.state.ambiguous || this.state.degraded) this.scheduleRecovery();
     }
   }
 
-  async start() {
-    validateRuntimePaths(this.options);
-    this.lock = acquireLock(this.options.lockFile);
-    this.client = new AppServerClient({
+  makeClient() {
+    return new AppServerClient({
       codexBin: this.options.codexBin,
       codexArgs: this.options.codexArgs,
       codexHome: this.options.codexHome,
@@ -451,16 +488,114 @@ export class HiveWakeController {
       childEnv: this.options.childEnv,
       onLog: (value) => this.log(value),
     });
+  }
+
+  scheduleRecovery() {
+    if (this.stopping || this.recoveryTimer || this.recovering) return;
+    const delays = this.options.recoveryDelays ?? [1_000, 5_000, 15_000, 60_000];
+    if (delays.length === 0) return;
+    const delay = delays[Math.min(this.recoveryAttempts, delays.length - 1)];
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      void this.recover();
+    }, delay);
+  }
+
+  async replaceClient() {
+    if (this.client) await this.client.stop().catch(() => {});
+    this.client = this.makeClient();
+    await this.client.start(this.state.threadId);
+  }
+
+  markArmed(event = "armed") {
+    const at = new Date().toISOString();
+    this.state.armedAt = at;
+    this.state.heartbeatAt = at;
+    this.persist();
+    this.log({ event, threadId: this.state.threadId });
+  }
+
+  async recover() {
+    if (this.stopping || this.busy || this.recovering || (!this.state.ambiguous && !this.state.degraded)) return;
+    this.recovering = true;
+    this.recoveryAttempts += 1;
+    const recoveringAmbiguity = Boolean(this.state.ambiguous);
+    this.state.recovery = {
+      at: new Date().toISOString(),
+      attempt: this.recoveryAttempts,
+      reason: recoveringAmbiguity ? "ambiguous-delivery" : "post-surface-idle",
+    };
+    this.persist();
+    this.log({ event: "recovery-attempt", ...this.state.recovery });
+    let ready = false;
+    try {
+      await this.replaceClient();
+      this.state.ambiguous = null;
+      this.state.degraded = null;
+      this.state.recovery = null;
+      this.recoveryAttempts = 0;
+      if (recoveringAmbiguity) this.reconcile("ambiguous-recovery");
+      this.persist();
+      this.log({ event: "recovered", reason: recoveringAmbiguity ? "ambiguous-delivery" : "post-surface-idle" });
+      ready = true;
+    } catch (error) {
+      this.state.recovery = {
+        ...this.state.recovery,
+        failedAt: new Date().toISOString(),
+        lastError: error.message,
+      };
+      this.persist();
+      this.log({ event: "recovery-failed", attempt: this.recoveryAttempts, reason: error.message });
+    } finally {
+      this.recovering = false;
+    }
+    if (!ready) {
+      this.scheduleRecovery();
+      return;
+    }
+    await this.flush();
+    if (!this.state.ambiguous && !this.state.degraded) this.markArmed();
+  }
+
+  async start() {
+    validateRuntimePaths(this.options);
+    this.lock = acquireLock(this.options.lockFile);
+    this.state.controllerPid = process.pid;
+    this.state.startedAt = new Date().toISOString();
+    this.state.stoppedAt = null;
+    this.state.heartbeatAt = this.state.startedAt;
+    this.persist();
+    this.client = this.makeClient();
     try {
       const threadId = await this.client.start(this.state.threadId);
       this.state.threadId = threadId;
+      if (this.state.ambiguous || this.state.degraded || this.state.recovery) {
+        this.log({ event: "startup-recovered-latch", ambiguous: this.state.ambiguous, degraded: this.state.degraded });
+        this.state.ambiguous = null;
+        this.state.degraded = null;
+        this.state.recovery = null;
+      }
       this.initializeEventCursor();
       this.reconcile("startup");
       await this.flush();
       this.timer = setInterval(() => this.poll(), this.options.pollMs);
-      this.log({ event: "armed", threadId });
+      this.heartbeatTimer = setInterval(() => {
+        if (this.stopping) return;
+        this.state.heartbeatAt = new Date().toISOString();
+        this.persist();
+      }, this.options.heartbeatMs ?? 5_000);
+      if (!this.state.ambiguous && !this.state.degraded) this.markArmed();
+      else this.scheduleRecovery();
     } catch (error) {
       await this.client.stop().catch(() => {});
+      this.state.degraded = {
+        at: new Date().toISOString(),
+        reason: error.message,
+        phase: "startup",
+      };
+      this.state.heartbeatAt = null;
+      this.state.stoppedAt = new Date().toISOString();
+      this.persist();
       releaseLock(this.lock);
       this.lock = null;
       throw error;
@@ -469,17 +604,7 @@ export class HiveWakeController {
 
   async restartCodex() {
     if (this.busy || this.client.status !== "idle") throw new Error("restart requires idle controller");
-    await this.client.stop();
-    this.client = new AppServerClient({
-      codexBin: this.options.codexBin,
-      codexArgs: this.options.codexArgs,
-      codexHome: this.options.codexHome,
-      workspace: this.options.workspace,
-      token: this.options.token,
-      childEnv: this.options.childEnv,
-      onLog: (value) => this.log(value),
-    });
-    await this.client.start(this.state.threadId);
+    await this.replaceClient();
     this.reconcile("codex-restart");
     await this.flush();
     this.log({ event: "rearmed-after-codex-restart", threadId: this.state.threadId });
@@ -488,8 +613,15 @@ export class HiveWakeController {
   async stop() {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     this.timer = null;
+    this.heartbeatTimer = null;
+    this.recoveryTimer = null;
     if (this.client) await this.client.stop();
+    this.state.stoppedAt = new Date().toISOString();
+    this.state.heartbeatAt = null;
+    this.persist();
     releaseLock(this.lock);
     this.lock = null;
   }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { lockStatus } from "../cli.mjs";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const installer = path.join(packageRoot, "install.mjs");
@@ -83,6 +84,15 @@ test("release install, doctor, duplicate refusal, and manifest-bound uninstall",
     assert.equal(doctor.launchAgentInstalled, false);
     assert.equal(doctor.workspaceEmpty, true);
     assert.equal(doctor.ordinaryStateMatchesInstallSnapshot, true);
+    fs.writeFileSync(path.join(f.installRoot, "runtime", "state.json"), `${JSON.stringify({
+      schema: 1,
+      persona: "codex",
+      ambiguous: { at: "2026-07-29T20:14:31.692Z", reason: "acceptance unknown", batch: [] },
+    })}\n`, { mode: 0o600 });
+    const unhealthy = JSON.parse(run([f.launcher, "doctor"], 1).stdout);
+    assert.equal(unhealthy.status, "RED");
+    assert.match(unhealthy.wake.reasons.join(" "), /delivery ambiguous since 2026-07-29T20:14:31\.692Z/);
+    fs.unlinkSync(path.join(f.installRoot, "runtime", "state.json"));
     run(installArgs(f), 1);
     assert.equal(fs.readFileSync(f.config, "utf8"), ordinaryBefore);
     assert.equal(fs.readFileSync(f.auth, "utf8"), authBefore);
@@ -149,6 +159,30 @@ test("doctor and uninstall fail closed on installed-byte tampering", () => {
 test("smoke command fences armed evidence to bytes written after its own start", () => {
   const cli = fs.readFileSync(path.join(packageRoot, "cli.mjs"), "utf8");
   assert.match(cli, /const logOffset = fs\.existsSync\(logFile\) \? fs\.statSync\(logFile\)\.size : 0/);
-  assert.match(cli, /waitArmed\(manifest, 180_000, started\.logOffset\)/);
+  assert.match(cli, /const armed = await waitArmed\(manifest, 180_000, logOffset\)/);
+  assert.match(cli, /armed: started\.armed/);
   assert.match(cli, /bytes\.subarray\(logOffset\)/);
+});
+
+test("sandbox EPERM process probe falls back to a fresh private heartbeat", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-kijito-heartbeat."));
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
+  const now = Date.parse("2026-07-30T03:45:00Z");
+  try {
+    fs.writeFileSync(path.join(runtime, "consumer.lock"), `${JSON.stringify({ pid: 4242, token: "token", persona: "codex" })}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(runtime, "state.json"), `${JSON.stringify({
+      schema: 1,
+      persona: "codex",
+      controllerPid: 4242,
+      heartbeatAt: new Date(now - 1_000).toISOString(),
+    })}\n`, { mode: 0o600 });
+    const eperm = Object.assign(new Error("not permitted"), { code: "EPERM" });
+    const status = lockStatus({ paths: { runtime } }, now, {
+      kill: () => { throw eperm; },
+      command: () => ({ command: "", error: "EPERM" }),
+    });
+    assert.equal(status.state, "running");
+    assert.equal(status.evidence, "private-heartbeat");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

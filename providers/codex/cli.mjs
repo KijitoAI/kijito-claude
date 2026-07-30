@@ -40,23 +40,79 @@ function optionalHash(file) {
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
 }
 
+const HEARTBEAT_STALE_MS = 15_000;
+const DELIVERY_STALE_MS = 180_000;
+
 function processCommand(pid) {
   const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() : "";
+  return {
+    command: result.status === 0 ? result.stdout.trim() : "",
+    error: result.error?.code ?? (result.status === 0 ? null : "ps-failed"),
+  };
 }
 
-function lockStatus(manifest) {
+function readRuntimeState(manifest) {
+  const stateFile = path.join(manifest.paths.runtime, "state.json");
+  try {
+    const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    if (state.schema !== 1 || state.persona !== "codex") throw new Error("runtime state identity mismatch");
+    return state;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function freshHeartbeat(state, pid, now = Date.now()) {
+  const at = Date.parse(state?.heartbeatAt ?? "");
+  const age = now - at;
+  return state?.controllerPid === pid && Number.isFinite(at) && age >= -5_000 && age <= HEARTBEAT_STALE_MS;
+}
+
+export function lockStatus(manifest, now = Date.now(), probes = { kill: process.kill.bind(process), command: processCommand }) {
   const lockFile = path.join(manifest.paths.runtime, "consumer.lock");
   let lock;
   try { lock = JSON.parse(fs.readFileSync(lockFile, "utf8")); }
   catch (error) { if (error.code === "ENOENT") return { state: "stopped", lockFile }; throw error; }
   if (!Number.isSafeInteger(lock.pid) || lock.pid <= 1 || typeof lock.token !== "string" || lock.persona !== "codex") return { state: "invalid-lock", lockFile };
-  let alive = true;
-  try { process.kill(lock.pid, 0); } catch { alive = false; }
-  if (!alive) return { state: "stale-lock", pid: lock.pid, lockFile };
-  const command = processCommand(lock.pid);
-  if (!command.includes(controllerFile)) return { state: "pid-mismatch", pid: lock.pid, command, lockFile };
-  return { state: "running", pid: lock.pid, command, lockFile };
+  let signalProbe = "alive";
+  try { probes.kill(lock.pid, 0); }
+  catch (error) {
+    if (error.code === "ESRCH") return { state: "stale-lock", pid: lock.pid, lockFile };
+    signalProbe = error.code ?? "unknown-error";
+  }
+  const probe = probes.command(lock.pid);
+  if (probe.command && !probe.command.includes(controllerFile)) {
+    return { state: "pid-mismatch", pid: lock.pid, command: probe.command, lockFile };
+  }
+  if (probe.command) return { state: "running", pid: lock.pid, command: probe.command, evidence: "process-command", lockFile };
+  const runtime = readRuntimeState(manifest);
+  if (freshHeartbeat(runtime, lock.pid, now)) {
+    return { state: "running", pid: lock.pid, command: null, evidence: "private-heartbeat", signalProbe, commandProbe: probe.error, lockFile };
+  }
+  return { state: "unverifiable-lock", pid: lock.pid, signalProbe, commandProbe: probe.error, lockFile };
+}
+
+export function runtimeHealth(manifest, controller, now = Date.now()) {
+  const state = readRuntimeState(manifest);
+  const reasons = [];
+  if (!["running", "stopped"].includes(controller.state)) reasons.push(`controller ownership is ${controller.state}`);
+  if (state?.ambiguous) reasons.push(`delivery ambiguous since ${state.ambiguous.at ?? "unknown"}: ${state.ambiguous.reason ?? "unknown"}`);
+  if (state?.degraded) reasons.push(`controller degraded since ${state.degraded.at ?? "unknown"}: ${state.degraded.reason ?? "unknown"}`);
+  if (state?.recovery) reasons.push(`recovery incomplete since ${state.recovery.at ?? "unknown"}`);
+  if (controller.state === "running") {
+    if (!state?.armedAt) reasons.push("controller has not recorded armed state");
+    if (!freshHeartbeat(state, controller.pid, now)) reasons.push("controller heartbeat is stale or belongs to another pid");
+  }
+  const pendingAt = Date.parse(state?.pendingSince ?? "");
+  if (Number.isFinite(pendingAt) && now - pendingAt > DELIVERY_STALE_MS) {
+    reasons.push(`relevant event pending without a successful surface since ${state.pendingSince}`);
+  }
+  return {
+    status: reasons.length === 0 ? (controller.state === "running" ? "ARMED" : "INACTIVE") : "RED",
+    reasons,
+    state,
+  };
 }
 
 function doctor(manifest) {
@@ -98,8 +154,9 @@ function doctor(manifest) {
   const ordinaryStateMatchesInstallSnapshot = ordinaryNow.configSha256 === manifest.hashes.ordinaryConfigBeforeSha256
     && ordinaryNow.authSha256 === manifest.hashes.ordinaryAuthBeforeSha256;
   const status = lockStatus(manifest);
+  const wake = runtimeHealth(manifest, status);
   return {
-    status: "GREEN",
+    status: wake.status === "RED" ? "RED" : "GREEN",
     product: manifest.product,
     version: manifest.version,
     controllerSha256: manifest.hashes.controllerSha256,
@@ -110,6 +167,7 @@ function doctor(manifest) {
     eventStreamReady: eventExists,
     ordinaryStateMatchesInstallSnapshot,
     controller: status,
+    wake: { status: wake.status, reasons: wake.reasons },
   };
 }
 
@@ -168,7 +226,8 @@ async function start(manifest) {
     if (["invalid-lock", "stale-lock", "pid-mismatch"].includes(current.state)) throw new Error(`controller entered ${current.state}`);
     return current.state === "running" ? current : null;
   }, 10_000, "controller ownership");
-  return { status: "STARTED", ...running, logFile, logOffset };
+  const armed = await waitArmed(manifest, 180_000, logOffset);
+  return { status: "ARMED", ...running, logFile, logOffset, armed };
 }
 
 async function stop(manifest) {
@@ -190,8 +249,14 @@ async function waitArmed(manifest, timeoutMs = 180_000, logOffset = 0) {
     const rows = text.split("\n").filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
     const armed = rows.findLast((row) => row.event === "armed");
     const ambiguous = rows.findLast((row) => row.event === "ambiguous");
+    const degraded = rows.findLast((row) => row.event === "degraded");
     if (ambiguous && (!armed || ambiguous.ts > armed.ts)) throw new Error(`startup became ambiguous: ${ambiguous.reason}`);
-    return armed ?? null;
+    if (degraded && (!armed || degraded.ts > armed.ts)) throw new Error(`startup became degraded: ${degraded.reason}`);
+    if (!armed) return null;
+    const current = lockStatus(manifest);
+    const wake = runtimeHealth(manifest, current);
+    if (wake.status === "RED") throw new Error(`startup is not armed: ${wake.reasons.join("; ")}`);
+    return armed;
   }, timeoutMs, "controller armed state");
 }
 
@@ -211,7 +276,11 @@ async function main() {
   const [command = "status", ...rest] = process.argv.slice(2);
   let result;
   if (command === "doctor") result = doctor(manifest);
-  else if (command === "status") result = { status: lockStatus(manifest) };
+  else if (command === "status") {
+    const controller = lockStatus(manifest);
+    const wake = runtimeHealth(manifest, controller);
+    result = { status: controller, wake: { status: wake.status, reasons: wake.reasons } };
+  }
   else if (command === "run") {
     const child = spawn(process.execPath, controllerArgs(manifest), { cwd: manifest.paths.workspace, env: safeEnv(), stdio: "inherit" });
     process.on("SIGINT", () => child.kill("SIGINT"));
@@ -223,15 +292,18 @@ async function main() {
   else if (command === "stop") result = await stop(manifest);
   else if (command === "smoke") {
     const started = await start(manifest);
-    try { result = { status: "GREEN", started, armed: await waitArmed(manifest, 180_000, started.logOffset) }; }
+    try { result = { status: "GREEN", started, armed: started.armed }; }
     finally { await stop(manifest); }
   } else if (command === "wait-armed") result = { status: "ARMED", event: await waitArmed(manifest) };
   else if (command === "uninstall") result = await uninstall(manifest, rest.includes("--confirm-dedicated-home"));
   else throw new Error(`unknown command: ${command}`);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (result?.status === "RED" || result?.wake?.status === "RED") process.exitCode = 1;
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.stack ?? error.message}\n`);
-  process.exitCode = 1;
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    process.stderr.write(`${error.stack ?? error.message}\n`);
+    process.exitCode = 1;
+  });
+}

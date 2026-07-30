@@ -221,7 +221,7 @@ test("whole-controller restart always performs a fresh durable-inbox reconciliat
   } finally { cleanup(fixture); }
 });
 
-test("ambiguous wake records terminal state and never retries", async () => {
+test("ambiguous wake fails closed, then recovers through a durable-inbox reconciliation", async () => {
   const fixture = tempFixture();
   const logs = [];
   try {
@@ -231,17 +231,109 @@ test("ambiguous wake records terminal state and never retries", async () => {
       codexBin: "unused",
       codexArgs: [],
       pollMs: 10,
+      recoveryDelays: [],
       output: (text) => logs.push(JSON.parse(text)),
     });
     let attempts = 0;
     controller.client = { status: "idle", wake: async () => { attempts += 1; throw new Error("acceptance unknown"); } };
     controller.queue({ kind: "new", id: 99, key: "new:99" });
     await controller.flush();
-    await controller.flush();
     assert.equal(attempts, 1);
     assert.equal(controller.state.ambiguous.reason, "acceptance unknown");
     assert.equal(logs.at(-1).event, "ambiguous");
+    controller.replaceClient = async () => {
+      controller.client = {
+        status: "idle",
+        threadId: "test-thread",
+        wake: async () => { attempts += 1; return { turnId: "reconcile-turn", text: "ok", digest: "digest" }; },
+        waitForIdle: async () => {},
+      };
+    };
+    await controller.recover();
+    assert.equal(attempts, 2, "the uncertain batch is not replayed; one inbox reconciliation is sent");
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.lastMailId, 0, "an uncertain message is never falsely acknowledged");
+    assert.ok(logs.some((row) => row.event === "recovered"));
+    assert.ok(logs.some((row) => row.event === "armed"));
   } finally { cleanup(fixture); }
+});
+
+test("completed wake is durably surfaced before a missing idle transition degrades liveness", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  try {
+    const controller = new HiveWakeController({ ...fixture, recoveryDelays: [], output: (text) => logs.push(JSON.parse(text)) });
+    controller.client = {
+      status: "idle",
+      threadId: "test-thread",
+      wake: async () => ({ turnId: "completed-turn", text: "delivered", digest: "digest" }),
+      waitForIdle: async () => { throw new Error("thread did not become idle"); },
+    };
+    controller.queue({ kind: "new", id: 100, key: "new:100", trigger: "mail" });
+    await controller.flush();
+    assert.equal(controller.state.lastAttempt.accepted, true);
+    assert.equal(controller.state.lastMailId, 100);
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(controller.state.degraded.phase, "post-surface-idle");
+    assert.equal(logs.findIndex((row) => row.event === "surfaced") < logs.findIndex((row) => row.event === "degraded"), true);
+  } finally { cleanup(fixture); }
+});
+
+test("controller restart clears a persisted ambiguity only after the exact thread resumes idle", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  const state = initialState();
+  state.threadId = "mock-thread-1";
+  state.ambiguous = { at: "2026-07-29T20:14:31.692Z", reason: "thread did not become idle", batch: [] };
+  saveState(fixture.stateFile, state);
+  const controller = new HiveWakeController({
+    ...fixture,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    recoveryDelays: [],
+    pollMs: 10,
+    output: (text) => logs.push(JSON.parse(text)),
+  });
+  try {
+    await controller.start();
+    assert.equal(controller.state.ambiguous, null);
+    assert.ok(logs.some((row) => row.event === "startup-recovered-latch"));
+    assert.ok(logs.some((row) => row.event === "surfaced" && row.batch.some((item) => item.key === "reconcile:startup")));
+    assert.ok(logs.some((row) => row.event === "armed"));
+  } finally {
+    await controller.stop();
+    cleanup(fixture);
+  }
+});
+
+test("post-surface idle loss restarts the child and rearms without replaying the completed wake", async () => {
+  const fixture = tempFixture();
+  const logs = [];
+  const idleMarker = path.join(fixture.root, "skip-idle-once");
+  const controller = new HiveWakeController({
+    ...fixture,
+    token: "test-token",
+    codexBin: process.execPath,
+    codexArgs: [mockAppServer],
+    childEnv: { MOCK_TRACE_FILE: fixture.traceFile, MOCK_SKIP_IDLE_ONCE_MARKER: idleMarker },
+    idleTimeoutMs: 20,
+    recoveryDelays: [10],
+    pollMs: 10,
+    output: (text) => logs.push(JSON.parse(text)),
+  });
+  try {
+    await controller.start();
+    await waitUntil(() => logs.some((row) => row.event === "recovered") && logs.some((row) => row.event === "armed"));
+    assert.equal(controller.state.degraded, null);
+    assert.equal(controller.state.ambiguous, null);
+    assert.equal(logs.filter((row) => row.event === "surfaced").length, 1);
+    const trace = fs.readFileSync(fixture.traceFile, "utf8");
+    assert.equal((trace.match(/kijito-wake-v1-/g) ?? []).length, 1, "known-completed wake is never replayed during recovery");
+  } finally {
+    await controller.stop();
+    cleanup(fixture);
+  }
 });
 
 test("active thread and held lock both refuse a second consumer action", async () => {

@@ -39,7 +39,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     emit({ method: "thread/status/changed", params: { threadId, status: { type: "active", activeFlags: [] } } });
     emit({ method: "turn/started", params: { turn: { id: turnId, status: "inProgress" } } });
     emit({ method: "item/agentMessage/delta", params: { threadId, turnId, delta: "MOCK_SURFACED" } });
-    emit({ method: "thread/status/changed", params: { threadId, status: { type: "idle" } } });
+    const idleMarker = process.env.MOCK_SKIP_IDLE_ONCE_MARKER;
+    const skipIdle = idleMarker && !fs.existsSync(idleMarker);
+    if (skipIdle) fs.writeFileSync(idleMarker, "skipped\n");
+    else emit({ method: "thread/status/changed", params: { threadId, status: { type: "idle" } } });
     emit({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } });
   } else {
     emit({ id: msg.id, error: { code: -32601, message: `unknown ${msg.method}` } });
