@@ -18,7 +18,9 @@ lc_stopped() { [ -f "$KIJITO_LC_STOP" ]; }              # M1 — kill switch: `t
 # C3 — best-effort subagent guard. VERIFIED 2026-06-24: a subagent shares the parent's
 # CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_CHILD_SESSION / ENTRYPOINT, so there is NO reliable env
 # discriminator today. This only trips on FUTURE markers and NEVER false-positives the main
-# session (both are unset now). Real C3 protection = consumable QA token + cycle cap + kill switch.
+# session (both are unset now). Real C3 protection = consumable QA token + kill switch.
+# (The cycle cap was part of this list until 2026-07-29, when it was removed as non-discriminating —
+# see self-clear.sh "C2". Do not cite it as protection.)
 lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}" ]; }
 
 lc_pane_alive() { command -v tmux >/dev/null 2>&1 && tmux display-message -p -t "$1" '#{session_name}' >/dev/null 2>&1; }
@@ -37,7 +39,9 @@ lc_is_armed() { [ -f "$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}" ] || [ "${KIJITO
 
 # qa-token is SESSION-keyed (correct: each post-/clear session must earn its OWN fresh QA pass).
 lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosession}"; }
-# cycle/checkpoint are PANE-keyed: /clear ROTATES CLAUDE_CODE_SESSION_ID (verified live: 1c5947c1→
-# 6f305fa1 in the same pane %19), so a session-keyed counter resets every clear and the cap/checkpoint
-# never accumulate across the self-clear loop. The pane persists across clears → accumulate correctly.
+# The cycle counter is PANE-keyed: /clear ROTATES CLAUDE_CODE_SESSION_ID (verified live: 1c5947c1→
+# 6f305fa1 in the same pane %19), so a session-keyed counter would reset every clear and never
+# accumulate across the self-clear loop. The pane persists across clears → accumulates correctly.
+# ⚠️ Since 2026-07-29 this counter is TELEMETRY ONLY — nothing gates on it (see self-clear.sh "C2").
+# It stays because the cycle number is useful in the audit log; it is not a limit.
 lc_cycle_file() { echo "$KIJITO_LC_DIR/cycles.${TMUX_PANE:-${CLAUDE_CODE_SESSION_ID:-nosession}}"; }

@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Does this machine RUN what this repo SHIPS?
+#
+# WHY THIS EXISTS. On 2026-07-29 four of nine scripts had drifted between the repo and ~/.claude, with
+# the INSTALLED copy ahead by 3 days to 5 weeks — improvements that existed only in an un-versioned
+# location. The published packages (npx kijito-claude / pipx run kijito-claude) therefore shipped
+# months-old behaviour, and nothing anywhere reported it: lc_test.sh tested the installed copies, so a
+# drifted install looked like a passing repo.
+#
+# Two ways drift happens, and this check names which one you have:
+#   • INSTALLED NEWER  → someone edited ~/.claude directly. The edit is real work and is not in git;
+#                        copy it back into scripts/ and commit it, or it dies with the machine.
+#   • REPO NEWER       → the repo moved and this machine was never re-installed. Run ./install.sh.
+# "A merge does not move your local repo, and a pull does not install."
+#
+# Exit: 0 = in sync (or nothing installed → SKIP), 1 = drift found.
+set -u
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DEST="${KIJITO_INSTALL_DIR:-$HOME/.claude}"
+drift=0; same=0; missing=0
+
+if [ ! -d "$DEST" ]; then
+  echo "SKIP: no install at $DEST — nothing to compare (this is normal in CI)."
+  exit 0
+fi
+
+# Report which side is newer, so the operator knows which direction to fix.
+newer() {
+  local a="$1" b="$2" ta tb
+  ta=$(stat -f %m "$a" 2>/dev/null || stat -c %Y "$a" 2>/dev/null || echo 0)
+  tb=$(stat -f %m "$b" 2>/dev/null || stat -c %Y "$b" 2>/dev/null || echo 0)
+  if [ "$ta" -gt "$tb" ]; then echo "REPO NEWER      → this machine is stale; run ./install.sh"
+  elif [ "$tb" -gt "$ta" ]; then echo "INSTALLED NEWER → un-versioned work; copy into scripts/ and COMMIT it"
+  else echo "same mtime, different bytes"; fi
+}
+
+echo "== scripts: $REPO/scripts  vs  $DEST =="
+for s in "$REPO"/scripts/*.sh; do
+  n=$(basename "$s"); i="$DEST/$n"
+  if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
+  if [ "$(shasum -a 256 "$s" | cut -d' ' -f1)" = "$(shasum -a 256 "$i" | cut -d' ' -f1)" ]; then
+    printf "  ok       %s\n" "$n"; same=$((same+1))
+  else
+    printf "  DRIFT    %-26s %s\n" "$n" "$(newer "$s" "$i")"; drift=$((drift+1))
+  fi
+done
+
+echo "== skills: $REPO/skills  vs  $DEST/skills =="
+for d in "$REPO"/skills/*/; do
+  n=$(basename "$d"); i="$DEST/skills/$n/SKILL.md"
+  [ -f "$d/SKILL.md" ] || continue
+  if [ ! -f "$i" ]; then printf "  MISSING  %-26s not installed\n" "$n"; missing=$((missing+1)); continue; fi
+  if [ "$(shasum -a 256 "$d/SKILL.md" | cut -d' ' -f1)" = "$(shasum -a 256 "$i" | cut -d' ' -f1)" ]; then
+    printf "  ok       %s\n" "$n"; same=$((same+1))
+  else
+    printf "  DRIFT    %-26s %s\n" "$n" "$(newer "$d/SKILL.md" "$i")"; drift=$((drift+1))
+  fi
+done
+
+# Files present in the install but with no repo counterpart. NOT drift — an install dir legitimately
+# holds unrelated local tools — but worth naming, since an artifact with no upstream anywhere is
+# exactly how the 2026-07-29 gap arose. Reported, never failed on.
+echo "== installed-only (no repo counterpart — FYI, not a failure) =="
+found_only=0
+for i in "$DEST"/*.sh; do
+  [ -f "$i" ] || continue
+  n=$(basename "$i")
+  [ -f "$REPO/scripts/$n" ] || { printf "  local-only  %s\n" "$n"; found_only=1; }
+done
+[ "$found_only" -eq 0 ] && echo "  (none)"
+
+echo
+echo "RESULT: $same in sync, $drift drifted, $missing missing"
+if [ "$drift" -gt 0 ]; then
+  echo "FAIL: repo and install disagree. Fix the DIRECTION named above — do not assume the repo is right."
+  exit 1
+fi
+echo "PASS: this machine runs what the repo ships."
