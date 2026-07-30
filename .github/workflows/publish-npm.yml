@@ -4,11 +4,24 @@ name: publish-npm
 # npm exchanges a short-lived workflow credential and attaches provenance automatically.
 #
 # v0.1.0 was published manually (npm can't OIDC-publish a brand-new package). The trusted
-# publisher IS configured on npmjs.com (KijitoAI/kijito-claude + publish-npm.yml). The v0.1.1
-# tag still failed with "E404 PUT ... not in this registry" — that was NOT a config problem:
-# node 22 bundles npm 10.x, and OIDC Trusted Publishing needs npm >=11.5.1, so the CLI did an
-# unauthenticated publish (404). The `npm install -g npm@latest` step below is the fix. The
-# PyPI job is independent and unaffected.
+# publisher IS configured on npmjs.com (KijitoAI/kijito-claude + publish-npm.yml).
+#
+# ⛔ DO NOT ADD `registry-url` TO setup-node HERE. It is the thing that breaks OIDC, and it has now
+# broken it twice. setup-node with registry-url writes an .npmrc containing
+# `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and points NPM_CONFIG_USERCONFIG at it.
+# With no NODE_AUTH_TOKEN secret, npm sends the literal placeholder `XXXXX-XXXXX-XXXXX-XXXXX` as a
+# bearer token, so it never attempts the OIDC exchange at all and the registry answers
+# `E404 Not Found - PUT` — which reads like "package missing" but means "not authorized". The
+# package plainly exists at 0.1.0, so absence was never a plausible reading of that 404.
+#
+# HISTORY, because this was diagnosed correctly and then undone: 69eac8d dropped registry-url for
+# exactly this reason, and b344dfa restored it as the "canonical OIDC form". The v0.1.2 tag then
+# failed identically to v0.1.1, with the placeholder token visible in the run log. Two ingredients
+# are both required and neither is registry-url: `id-token: write`, and npm >= 11.5.1 (Node 22
+# bundles npm 10.x, hence the explicit upgrade step).
+#
+# The PyPI job is independent and unaffected; it has published 0.1.0, 0.1.1 and 0.1.2 without
+# trouble.
 on:
   push:
     tags: ["v*"]
@@ -23,11 +36,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # NO registry-url: see the block at the top of this file. It shadows OIDC with a placeholder
+      # auth token, and adding it back will reproduce the E404 on the next tag.
       - uses: actions/setup-node@v4
         with:
           node-version: "22"        # Trusted Publishing needs Node >=22.14 on the runner
-          registry-url: "https://registry.npmjs.org"
       # Node 22 bundles npm 10.x, but OIDC Trusted Publishing needs npm >=11.5.1.
       - run: npm install -g npm@latest
       - run: npm ci
+      # Fail loudly if an auth token is configured, rather than silently falling back to a
+      # placeholder-token publish that 404s in a way that looks like a missing package.
+      - name: assert no auth token is shadowing OIDC
+        run: |
+          npm --version
+          if npm config get //registry.npmjs.org/:_authToken 2>/dev/null | grep -qv '^undefined$'; then
+            echo "An npm auth token is configured; OIDC Trusted Publishing will be bypassed." >&2
+            npm config get //registry.npmjs.org/:_authToken >&2
+            exit 1
+          fi
       - run: npm publish --access public
