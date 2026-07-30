@@ -70,6 +70,15 @@ jobs:
           set -euo pipefail
           npm pack --silent >/dev/null
           TGZ=$(ls kijito-claude-*.tgz)
+          # ⛔ MATERIALIZE THE LISTING ONCE; DO NOT PIPE `tar` INTO `grep -q`.
+          # `grep -q` exits at its first match, `tar` then dies writing the remainder (EPIPE), and
+          # under `set -o pipefail` the pipeline reports TAR's failure -- so a file that IS present
+          # reports MISSING. Measured here: package/NOTICE is entry 2 of 35, leaving 33 entries
+          # unwritten, so it false-FAILED while package/install.sh at entry 24 passed. And the
+          # negative check below inverts: a real leak makes grep exit early, tar fail, the pipeline
+          # non-zero, and the `if` take the ELSE branch -- silently passing the leak.
+          # It does NOT reproduce on macOS/BSD tar, so this can only be caught on the runner.
+          tar tzf "$TGZ" > /tmp/npm-payload.txt
           for f in install.sh NOTICE \
                    providers/claude/install.sh \
                    providers/claude/scripts/self-clear.sh \
@@ -80,10 +89,11 @@ jobs:
                    providers/codex/test/codex-hive-watch.test.mjs \
                    providers/codex/skills/kijito-qa-memory/agents/openai.yaml \
                    providers/_shared/wake-core.mjs; do
-            tar tzf "$TGZ" | grep -qx "package/$f" || { echo "MISSING from npm payload: $f"; exit 1; }
+            grep -qx "package/$f" /tmp/npm-payload.txt || { echo "MISSING from npm payload: $f"; exit 1; }
           done
           # legacy/ is history, never shipped.
-          if tar tzf "$TGZ" | grep -q "legacy/"; then echo "legacy/ leaked into the npm payload"; exit 1; fi
+          if grep -q "legacy/" /tmp/npm-payload.txt; then echo "legacy/ leaked into the npm payload"; exit 1; fi
+          echo "npm payload: $(wc -l < /tmp/npm-payload.txt) entries, all required files present"
           pipx run build >/dev/null
           python3 - <<'PY'
           import zipfile, glob, sys
