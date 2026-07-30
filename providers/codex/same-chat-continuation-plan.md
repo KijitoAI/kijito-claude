@@ -1,10 +1,14 @@
 # Codex same-chat continuation plan
 
-Status: **PLAN ONLY — implementation is forbidden until this plan is internally golden and Assay reviews the frozen commit CLEAN.**
+Status: **PLAN ONLY.** Two consecutive Assay-CLEAN reviews of one unchanged plan digest open N0
+only. After that gate, disposable probe harnesses and any separately reviewed provider-neutral claim
+API may be built. N0-N3 and Jason's explicit risk/cost acceptance must pass before an installable
+Codex continuation provider may be implemented, installed, migrated, or enabled.
 
-Owner: Codex provider lane. River owns repository integration. Assay owns independent plan review.
+Owner: Codex provider lane. River owns repository integration and any production cutover. Assay owns
+independent plan review. Jason owns residual-risk and measured-cost acceptance.
 
-## 1. Decision and evidence
+## 1. Decision, evidence, and supersession
 
 Reject the dedicated-thread notifier as an implementation of “mail wakes my Codex session and work
 continues while I am away.” Live hive message 2630 proved the mismatch:
@@ -15,57 +19,75 @@ continues while I am away.” Live hive message 2630 proved the mismatch:
 - That turn reported “No unread hive messages,” while controller state advanced through 2630.
 - Jason's working chat received no turn and continued no work.
 
-The design deliberately preserves `currentUserThreadMutation=false`; more recovery code cannot make
-an isolated thread become the user's chat. Existing notifier code/tests may remain research, but must
-not authorize installation, migration, or a parity claim.
+The design deliberately preserved `currentUserThreadMutation=false`; more recovery code cannot make
+an isolated thread become the user's chat. Existing notifier code/tests remain research only.
+PR #5 is closed as withdrawn, and the provider README points here instead of authorizing installation.
+The live legacy process remains untouched until the cutover gate in section 7.
 
 ## 2. Binary outcome contract
 
-Let `T` be the exact chat in which continuation is armed, `M` a durable hive row, and `R` the native
-background run caused by the continuation mechanism. DONE requires all of these:
+Let `T` be the exact chat in which continuation is armed, `E` the exact local project/worktree and
+permission profile, `M` a durable hive row, and `R` the native background run. DONE requires all of
+these:
 
-1. Jason ends a turn, leaves the desktop app running, and sends `M` remotely.
-2. Within the configured SLO, Codex creates `R` in **the exact chat `T`** without a user prompt.
-3. Native immutable metadata proves `R` targets `T` **and** the explicitly selected local project/
-   environment and permission profile. Visual similarity, cwd alone, newest-thread search, transcript
-   heuristics, or a controller-owned thread never count.
-4. `R` retrieves the exact durable row and provenance even if its unread flag already changed.
-5. `R` loads the current-state pointer and continues already-authorized work. Notification or summary
-   alone is RED.
-6. Message text is untrusted data. It cannot grant authority, expand scope, weaken policy, expose
-   secrets, or override the current user request.
-7. `M` receives a message-specific durable acknowledgment only after completed disposition. A crash
-   before acknowledgment is recoverable; duplicate runs cannot duplicate disposition.
-8. ARMED requires evidence that native continuation is enabled, bound to `T`, recently succeeded,
-   and reached hosted Kijito. A process, schedule record, or GREEN result alone is insufficient.
-9. Pause, stop, uninstall, rollback, and migration are explicit. No lifecycle hooks, LaunchAgent,
-   hidden second consumer, heuristic thread discovery, or ordinary Codex config/auth mutation.
+1. Jason ends a turn, leaves the computer on and desktop app running, and sends `M` remotely.
+2. When no prior continuation run owns the lane, Codex creates `R` in **the exact chat `T`** without
+   a user prompt within 90 seconds.
+3. An independent verifier outside `R` reads the app-owned rollout under `~/.codex/sessions` and
+   requires its first `session_meta.payload.id == T`, its scheduled turn ID/run ID and nonce match
+   the native Scheduled run record, and its recorded `cwd`/environment and permission evidence match
+   `E`. The run's own text, visual similarity, cwd alone, newest-thread search, transcript heuristics,
+   or a controller-owned thread never count. If Jason's installed build exposes no such independently
+   readable native artifact, N0 is RED.
+4. `R` retrieves the exact durable row and provenance even if another reader changed its unread flag.
+5. `R` loads the current-state pointer and performs a pre-registered bounded work slice. For the live
+   gate, the slice must create or update an independently read disposable-workspace receipt containing
+   the native run ID, message ID, nonce, before/after digests, and test result. Notification, summary,
+   a chat-only claim, or a receipt without the matching native run identity is RED.
+6. Mail remains tool-returned untrusted data and never enters the scheduled task's instruction text.
+   The versioned, user-authored prompt fixes the allowed tools, sandbox, project, and scope before any
+   row is read. Hostile mail must not change those fields or obtain a tool call outside them. This is
+   the testable boundary; no plan claims that arbitrary model behavior is mathematically impossible.
+7. Acknowledgment means the atomic completed-checkpoint commit for `M`, attributable to `T`, `R`, and
+   the claim fence. `mark_read=true` is courtesy presentation metadata after that commit, never the
+   acknowledgment or delivery ledger. A crash before commit is recoverable; duplicate runs cannot
+   duplicate disposition.
+8. ARMED requires independently verifiable native-run evidence, recent hosted-Kijito heartbeat,
+   valid claim/checkpoint ownership, and no blocking discovery or ambiguous action. A process,
+   schedule listing, self-report, or old GREEN result alone is insufficient.
+9. Pause, stop, uninstall, rollback, and migration are explicit and attended where the provider only
+   exposes UI management. No lifecycle hooks, LaunchAgent, hidden second consumer, heuristic thread
+   discovery, or ordinary Codex config/auth mutation.
 
-Initial SLO: **90 seconds while armed**. This is functional continuation parity, not transport parity
-with Claude's event-driven Monitor. The product must say polling when it means polling.
+The 90-second SLO measures run creation while the lane is idle. Discovery must finish within 15
+seconds. A simple informational disposition must commit within 90 seconds after run start. A work
+slice is capped at 45 seconds and records durable progress for the next tick; it never extends a
+lease invisibly. This is polling continuation, not event-driven transport parity with Claude Monitor.
 
 ## 3. Supported-surface decision
 
 ### Primary candidate: native scheduled task inside the existing chat
 
-Current Codex documentation says a scheduled task inside an existing chat returns to that chat with
-its existing context and supports minute intervals. It is the only documented same-chat unattended
-surface, but documentation is not a live capability result. Gate N0 must prove it in Jason's actual
-workspace before code is written.
+OpenAI's **Scheduled tasks** documentation, retrieved 2026-07-30, says an in-chat scheduled task
+returns to that chat with its existing context, supports minute intervals, can use chat-available
+skills/plugins, uses the chosen local project or worktree, and runs unattended with the default
+sandbox. It also says Codex CLI and the IDE do not provide the Scheduled management interface; tasks
+are created and managed through ChatGPT web/desktop and the **Scheduled** view. Documentation is not
+a capability result. N0 must prove the exact installed behavior before code exists.
 
-The candidate design is a native in-chat **continuation heartbeat**:
+The candidate is a native in-chat **continuation heartbeat**:
 
-- native scheduler binds one task to `T` and the explicitly selected local project/environment;
-- it runs once per minute while armed;
-- no-mail runs perform only bounded checkpoint/inbox reads;
-- mail runs load Kijito state, handle rows in ID order, continue authorized work, update memory as
-  state changes, and acknowledge only completed dispositions;
-- status describes it honestly as scheduled polling.
+- an attended ChatGPT/desktop procedure binds one task to `T` and `E` at a one-minute cadence;
+- no-mail runs perform only bounded pointer/checkpoint/all-mail inbox reads and emit no user-visible
+  content if the product supports suppression;
+- mail runs load Kijito state, handle rows in ID order, continue only already-authorized work in a
+  fenced slice, update memory as state changes, and commit completed dispositions;
+- status describes scheduled polling honestly.
 
-Official references:
+Official references (retrieved 2026-07-30):
 
-- <https://learn.chatgpt.com/docs/automations#schedule-a-task-inside-a-chat>
-- <https://learn.chatgpt.com/docs/app-server>
+- [Scheduled tasks](https://learn.chatgpt.com/docs/automations)
+- [Codex App Server](https://learn.chatgpt.com/docs/app-server)
 
 ### Conditional alternative: registered App Server thread
 
@@ -74,7 +96,7 @@ for desktop-chat continuation unless a no-code probe proves the desktop host sup
 current chat ID through a supported interface, explicitly leases it, displays client turns in the
 same chat, queues collisions without `turn/steer`, and revokes the lease on handoff. No transcript
 scan, mtime guess, private protocol, newest-thread selection, or separate `CODEX_HOME` is permitted.
-Failure rejects this alternative; it does not authorize a heuristic.
+Failure rejects this alternative; it never authorizes a heuristic.
 
 ### Rejected
 
@@ -85,21 +107,29 @@ Failure rejects this alternative; it does not authorize a heuristic.
 - newest/idle-thread guesses;
 - inbox unread state as delivery state.
 
-## 4. Provider-agnostic architecture
+## 4. Provider-agnostic architecture and security boundary
 
 The shared package owns persona binding, inbox discovery/pagination, exact-row fetch, checkpoint and
-claim state, post-disposition acknowledgment, idempotency/crash reconciliation, untrusted-data
+claim state, post-disposition courtesy read marking, idempotency/crash reconciliation, untrusted-data
 fencing, pointer loading, health evidence, and provider-neutral test vectors. It does **not** invoke
-an agent.
+an agent or manage a provider UI.
 
 | Provider | Invocation primitive | Latency | Same-session proof |
 |---|---|---:|---|
 | Claude Code | persistent Monitor in owning process | event-driven | process/session plus Monitor identity |
-| Codex desktop | native task inside armed chat | ≤90 s | native destination chat ID equals `T` |
+| Codex desktop | native task inside armed chat | ≤90 s idle | rollout `session_meta.id`, native run/turn ID, and Scheduled record equal `T` |
 | Codex App Server | only after supported explicit registration | candidate | registered lease and returned ID equal `T` |
 | Unknown | none | none | INACTIVE, never ARMED |
 
-Drivers must expose their actual semantics; no universal “wake” label may hide polling.
+Drivers expose actual semantics; no universal “wake” label hides polling.
+
+This design intentionally moves untrusted mail into Jason's working chat, whose already-selected
+workspace-write profile has more capability than the withdrawn notifier's read-only dedicated home.
+The fixed prompt must place mail only inside tool-returned untrusted-data fences, pin persona/project/
+tool allowlist before reading, forbid authority changes derived from mail, and require normal platform
+approval/sandbox enforcement. G3 tests behavioral attempts to alter those values. N3 separately shows
+Jason the residual prompt-injection and unattended-tool risk, exact effective permission profile, and
+available mitigations; Jason must explicitly accept it. Silence is not approval.
 
 ## 5. Durable mailbox transaction
 
@@ -109,132 +139,207 @@ Unread is presentation metadata, not the ledger.
 
 1. Read `CODEX_CONTINUATION_CHECKPOINT_V1` for persona `codex`.
 2. Fetch newest inbox with `unread_only=false, mark_read=false`.
-3. Page backward using `before_id` until the checkpoint or mailbox start, within a declared bound.
-4. Repoll newest after walking backward so concurrent arrivals are not stranded.
-5. Sort IDs above the completed checkpoint ascending and exact-refetch each with
-   `before_id=<id+1>, limit=1, mark_read=false`.
-6. Missing exact ID, truncated body, missing provenance, or an unbridgeable page is BLOCKED and cannot
-   advance the checkpoint.
+3. Page backward with `before_id` until the completed checkpoint or mailbox start.
+4. One tick may issue at most 256 inbox requests, inspect at most 10,000 unique IDs, and accept at
+   most 32 MiB of decoded bodies. Hitting any bound yields `BLOCKED_BACKLOG`; it never looks empty.
+5. Repoll newest after the backward walk so concurrent arrivals are not stranded.
+6. Sort IDs above the completed checkpoint ascending and exact-refetch each with
+   `before_id=<id+1>, limit=1, unread_only=false, mark_read=false`.
+7. ID gaps are allowed only when every page's strict ordering and continuation metadata bridge them;
+   the exact target still must be returned. Missing exact ID, truncated body, contradictory paging,
+   missing provenance, or unbridgeable gap is `BLOCKED_ROW(<id>)` and cannot advance the checkpoint.
 
-This deliberately finds 2630 even though it is already read.
+This finds 2630 even though it is already read and remains correct when another consumer marks rows
+read during the walk.
 
-### Claim, disposition, acknowledgment
+### Claim, work intent, disposition, acknowledgment
 
-Checkpoint state includes persona, armed chat ID, last completed ID, optional in-progress ID/nonce/
-start time, disposition, native run ID, pointer version used, and last successful heartbeat.
+The current hosted `kijito_hive_claim` is an account claim with a 60-second default lease (maximum
+five minutes) and no plan-proven holder-bound renewal/fencing contract. A one-minute scheduled cadence
+can therefore outlive and lawfully steal a predecessor's lease. It is not accepted as the continuation
+transaction merely because two simultaneous callers produce one winner.
 
-The run atomically claims a row before action. If the selected state surface cannot compare-and-set,
-N1 is RED; last-writer-wins is not acceptable. After completed disposition, exact-refetch only that
-row using `before_id=<id+1>, limit=1, mark_read=true`, assert its ID, commit the completed checkpoint,
-and clear the claim. A crash between steps reconciles from claim plus action evidence and never
-blindly repeats an external side effect.
+N1 must either prove a stronger existing surface or independently gate a minimal provider-neutral
+`CONTINUATION_CLAIM_V1` surface before any Codex implementation. That surface must atomically return a
+unique holder token and monotonic fence, use a 180-second lease, renew only for the same holder every
+45 seconds, reject older fences after takeover, and permit at most one active claim for `(persona,
+message_id)`. The work slice remains 45 seconds; a renewal failure stops before further action. A
+claim becomes stale only after server time passes `lease_expires_at`; expiry permits a new discovery
+owner but never proves a prior external side effect did not happen.
 
-The fixed schedule prompt is user-authored and versioned. Existing user scope and the pointer—not
-mail text—determine authority. Informational or requires-user rows receive explicit dispositions.
+Before any mutation, the holder atomically writes an intent containing message ID, fence, native run
+ID, action kind/target, input digest, idempotency key, expected pre-state digest, and reconciliation
+method. The mutation must either accept that idempotency/fence or produce independently readable
+before/after evidence. If neither is possible, the run records `REQUIRES_USER` and does not perform it.
+After action, the holder records the provider receipt/output digest, exact-refetches `M`, and commits
+`completed_id=M` plus disposition in the same fenced checkpoint transition. That commit is the ack.
+Only then may it exact-refetch with `mark_read=true` as a courtesy. A crash reconciles intent against
+the external receipt/state; it never retries solely because the lease expired. If the 45-second work
+slice ends before disposition, the holder atomically records `DEFERRED` progress and reconciliation
+state, releases its lease, and leaves `completed_id` unchanged. No action occurs after release.
 
-## 6. Arming lifecycle
+## 6. Health and attended lifecycle
 
-`arm` creates/enables one task bound to `T` and its selected execution environment, stores task/chat/
-environment IDs and permission profile, and runs an immediate self-test.
-Re-arm for the same `T` is idempotent. Handoff disables the old task before enabling another chat.
+There is no assumed programmatic Scheduled management API.
 
-`doctor` is GREEN/ARMED only when the task exists/enabled, targets recorded `T`, uses the recorded
-project/environment and permission profile, cadence meets SLO, a self-test returned to `T`, hosted
-Kijito was reachable, checkpoint ownership is valid, no legacy consumer can consume the persona
-stream, and no claim is ambiguous/stale. Sleep, app exit, disabled schedule, stale run time, outage,
-wrong-chat/environment binding, permission drift, double consumer, or unverifiable state is RED or
-INACTIVE.
+- **Arm:** Jason or an attended operator creates/enables the in-chat task through ChatGPT/desktop,
+  selects `T`, local project/worktree, model, cadence, and permission profile, then records the native
+  task/run evidence discovered by N0. Re-arm for the same identity is a documented idempotent UI
+  procedure; another chat requires cutover first.
+- **Doctor:** a read-only verifier outside the scheduled run reads the recorded rollout/run artifact,
+  checkpoint/claim state, and hosted heartbeat. It reports ARMED only while successful native runs
+  continue within two cadences and every identity field matches. It reports `BLOCKED_BACKLOG`,
+  `BLOCKED_ROW(id)`, `AMBIGUOUS_ACTION(id)`, `LEGACY_CONSUMER`, `STALE`, or `INACTIVE` explicitly.
+  It never claims that a UI task exists/enabled from self-report alone.
+- **Blocked-row escape:** automatic skipping is forbidden. An attended operator may repair/resend the
+  row or exact-quarantine one ID with reason and signed operator decision. Quarantine writes a durable
+  tombstone/disposition, preserves body digest/provenance where available, advances only that exact
+  ID under the claim fence, and leaves doctor RED until the operator confirms recovery.
+- **Pause/uninstall:** the attended operator disables or deletes the exact task in **Scheduled** and
+  verifies no run for two cadences. Uninstall then removes only manifest-owned checkpoint artifacts
+  after identity/ownership verification. No hooks, LaunchAgents, ordinary auth/config edits, or UI
+  scripting are used.
 
-`pause` disables the task but retains state. `uninstall` removes only manifest-owned task/checkpoint
-artifacts after ownership verification. Neither uses hooks/LaunchAgents or edits ordinary auth/config.
+N0b must probe the complete attended create, inspect, pause, resume, and delete path plus quotas,
+expiry, cadence limits, locked/background behavior, and recent-run evidence. If the installed product
+cannot expose enough evidence for doctor, the candidate is RED rather than papered over by a command.
 
-## 7. Pre-implementation gates
+## 7. Legacy cutover ownership and rollback
 
-No production code until N0–N3 are GREEN on the frozen plan.
+ARMED is unreachable while PID 38082 or any legacy notifier can consume persona `codex`. Planning and
+N0-N3 do not touch it.
 
-### N0 — native same-chat capability
+After two Assay-CLEAN plan reviews, N0-N3, implementation gates, and Jason's explicit authorization,
+River owns the attended cutover:
 
-With a disposable schedule and no Kijito controller code: record native chat ID `T` and the selected
-local project/environment `E`; create a one-minute task inside `T` that returns a unique nonce, native
-run ID, destination metadata, permission profile, and a read-only proof of `E`; end the turn and provide
-no prompt; observe the run within 90 seconds; prove destination ID equals `T`, environment equals `E`,
-and permissions equal the selected profile; repeat after a manual turn.
-In a second disposable run, invoke the installed `kijito-start` skill far enough to reach hosted
-Kijito, read the current pointer ID, and perform a `mark_read=false` inbox peek; prove the task has the
-same skill/plugin/MCP availability expected by the design without changing unread state. Then
-disable/delete the disposable task and prove no later run. Manual prompting, another chat, visual
-identity, unavailable tools, wrong local/worktree environment, permission drift, a different Kijito
-brain, unread-state mutation, UI automation, or hidden API is RED.
+1. Pause the new native task and snapshot its empty/non-disposition state.
+2. Stop the legacy controller; freeze and verify its last durable row/checkpoint and consumer lock.
+3. Prove for two old poll windows that no legacy or second consumer can advance the stream.
+4. Import/reconcile the checkpoint under the new fenced schema, verify exact IDs/digests, then enable
+   the native task and run one isolated canary.
+5. On failure before a native disposition, disable the native task, remove its uncommitted claim, and
+   restart the legacy process from the verified snapshot. After any native intent/disposition,
+   automatic rollback is forbidden; River reconciles the exact row/action before choosing one owner.
 
-### N1 — checkpoint transaction capability
+The rollback never runs two consumers concurrently and never treats `mark_read` as the cursor.
 
-Prove atomic create/compare-and-set. Two concurrent claimers yield one winner. Crash the winner before
-completion; the next run sees/reconciles the claim rather than overwriting it. If current Kijito APIs
-lack this, independently gate the minimal provider-neutral transaction API before Codex work.
+## 8. Pre-implementation gates
 
-### N2 — exact durable-row retrieval
+Only two consecutive Assay-CLEAN reviews of one unchanged digest open these gates. Disposable probes
+use a dedicated test persona, never persona `codex`, except N0a's explicitly read-only
+`mark_read=false` capability peek. N0-N3 do not authorize an installable provider until all are GREEN
+and Jason accepts N3.
 
-Synthetic account-owned mail proves unread, already-read, older-window, and content-budget-paginated
-rows are found; arrival during paging is caught by final repoll; exact fetch returns the intended ID;
-oversized/truncated content blocks without ack; ack changes only the intended row; malformed/missing
-row cannot advance past itself.
+### N0a — native same-chat, collision, and unattended capability
 
-### N3 — cost and policy fit
+With a disposable schedule and no Kijito controller code, record `T` and `E`; create a one-minute
+task inside `T` that returns a unique nonce and performs a read-only proof of `E`. An independent
+verifier outside the run must read the app-owned rollout plus Scheduled run record and match `T`,
+turn/run ID, nonce, cwd/project/worktree, model, sandbox, approval and permission profile. Repeat:
 
-Measure 30 idle minutes and 30 active-mail minutes in Jason's workspace: run count, exposed token use,
-wall time, failures, manual-turn interference, visible no-mail artifacts, transcript/context growth,
-and compaction pressure. If the native scheduler cannot suppress or compact empty heartbeat output,
-record that as product behavior rather than hiding it behind the no-mail path. Jason explicitly
-accepts the measured idle cost/noise/context growth and 90-second polling semantics before
-implementation. Silence is not approval.
+- after a completed manual turn;
+- while a manual turn is still active, proving the scheduled input queues and never uses steering;
+- with two scheduled firings made to overlap, proving only one run acts and the other reports/records
+  a collision without entering the turn;
+- while the app is backgrounded and Jason has been inactive for ten minutes;
+- once while the screen is locked, with computer awake and app running.
 
-## 8. Future implementation gates
+In a second disposable run, invoke installed `kijito-start` far enough to reach hosted Kijito, read the
+current pointer ID, and perform a `mark_read=false` inbox peek. Prove the scheduled run has the exact
+skill/plugin/MCP availability required. Manual prompting, a lookalike chat, self-reported identity,
+wrong environment/profile, steering, unavailable tools, a different brain, unread mutation, hidden
+API, or UI automation is RED.
+
+### N0b — attended task-management and health evidence
+
+Through documented ChatGPT/desktop controls, create, inspect, pause, resume, and delete the disposable
+task. Independently capture which stable IDs/run records/rollout artifacts are readable, cadence and
+quota/rate/expiry limits, and what happens after app exit, sleep, lock, project removal, and permission
+change. Prove doctor derives its state only from those artifacts plus hosted heartbeat and turns RED
+within two cadences after pause/delete/drift. If management requires unsupported automation or doctor
+cannot distinguish enabled from stale/disabled, N0b is RED.
+
+### N1 — fenced checkpoint transaction
+
+Test the exact chosen API, not a mock. Two concurrent claimers yield one holder token/fence. Keep one
+holder alive past 60 seconds and two schedule cadences; a contender cannot steal it. Stop renewal and
+prove takeover only after the 180-second server deadline with a larger fence. The old holder then
+cannot write intent, renew, commit, or acknowledge. Crash before intent, after intent, after external
+effect, and after commit; each reconciles without duplicate side effect. A non-idempotent adapter
+without intent+receipt reconciliation is refused. If this requires `CONTINUATION_CLAIM_V1`, its API,
+threat model, tests, and independent review are a separate provider-neutral prerequisite.
+
+### N2 — exact durable-row retrieval and blocked recovery
+
+Synthetic account-owned mail proves unread, already-read, older-window, ID-gap, and content-budget
+rows are found; another consumer marks rows read during every paging phase; arrival during paging is
+caught by final repoll; exact fetch returns the intended ID; oversized/truncated/missing/provenance-bad
+content blocks discovery and makes doctor RED; no later row advances; repair and operator-quarantine
+each recover only the exact blocked ID; checkpoint ack and courtesy `mark_read` affect only the intended
+row. Exercise all declared request/ID/byte bounds and require `BLOCKED_BACKLOG`, never false empty.
+
+### N3 — measured cost, compaction, interference, and risk acceptance
+
+Run 30 idle minutes and 30 active-mail minutes in the disposable workspace, followed by one forced
+native compaction and a six-hour unattended soak. Record run count, exposed tokens/rate-limit change,
+wall time, failures, completed-disposition latency, manual-turn collisions, visible no-mail artifacts,
+rollout/transcript byte growth, context-window growth, compaction behavior, and locked/background runs.
+
+Default RED thresholds, fixed before measurement: any wrong-chat/steered/overlapping disposition;
+any no-mail user-visible message; more than 2 KiB rollout growth per idle run; more than 5% context
+growth in 30 idle minutes; more than 30,000 exposed tokens in 30 idle minutes; any missed idle run
+beyond 90 seconds while computer/app are available; any simple disposition beyond 90 seconds after
+run start; any compaction that loses pointer/claim state; or any permission/tool drift. A threshold
+may change only in a new plan digest before the run, never after seeing results.
+
+Jason receives the measured daily projection, visible-noise/context cost, exact permission profile,
+prompt-injection residual risk, polling semantics, and mitigations. He must explicitly accept them
+before implementation. Silence is not approval.
+
+## 9. Future implementation gates
 
 These specify QA; they are not implementation permission.
 
-- **G1 protocol:** property tests for pagination, exact fetch/ack, CAS loss, crash reconciliation,
-  ordering, duplicates, hostile content, bad provenance, clock skew, stale health, migration fence.
-  Each high-value property has a mutation failing at its named assertion.
-- **G2 same chat:** no-mail read-only; normal/already-read mail handled once in `T`; duplicate fires
-  yield one claim; mail during a manual turn queues and is never steered; app sleep/restart drains
-  backlog in order; compaction reloads the pointer; no authorized work produces explicit disposition.
+- **G1 protocol:** property tests for paging/bounds, exact fetch, fenced lease renewal/takeover, stale
+  writer rejection, intent/effect/commit crash reconciliation, ordering, duplicates, hostile content,
+  bad provenance, clock skew, blocked health, and migration fence. Each high-value property has a
+  mutation failing at its unique named assertion.
+- **G2 same chat:** no-mail read-only; normal/already-read mail handled once in `T`; native rollout
+  identity independently verified; manual-turn input queues without steer; overlaps suppress; sleep/
+  restart drains backlog; compaction reloads pointer; no authorized work yields explicit disposition.
 - **G3 security:** injection, role impersonation, exfiltration, scope expansion, destructive requests,
-  body sender spoofing, oversized text, malformed Unicode/JSON cannot change instructions, authority,
-  tools, sandbox, chat target, claim ownership, or ack order.
-- **G4 lifecycle:** idempotent arm, wrong-chat refusal, pause/resume, ownership-bound uninstall,
-  app-down/disabled-task/outage health, stale-claim recovery, rollback, hard double-consumer fence, no
-  hooks or LaunchAgent.
-- **G5 live golden:** on one frozen build, A continues bounded work in exact `T`; B does so after app
-  restart or sleep/wake; C does so after native compaction via Kijito; disabled schedule leaves D
-  durable and health not ARMED, re-enable handles D once. Each arrives within SLO with native identity,
-  exact disposition, and ack evidence. Summary-only behavior is RED.
+  sender spoofing, oversized text, and malformed Unicode/JSON cannot change prompt/instruction role,
+  tool allowlist, sandbox, project, chat target, claim fence, intent, or ack order.
+- **G4 lifecycle:** attended idempotent arm, wrong-chat refusal, pause/resume, ownership-bound uninstall,
+  app-down/disabled/outage/blocked health, stale-claim recovery, cutover/rollback, hard double-consumer
+  fence, and zero hooks/LaunchAgents.
+- **G5 live golden:** A performs the registered disposable file/test mutation in exact `T`; B repeats
+  after app restart or sleep/wake; C repeats after forced compaction; disabled schedule leaves D
+  durable and health not ARMED, then re-enable handles D once. Each has independently matched native
+  run identity, external receipt, exact disposition, fenced checkpoint ack, and SLO. Summary-only is
+  RED.
 
-## 9. Plan QA and independent gate
+## 10. Plan QA and independent gate
 
-INTERNAL GOLDEN requires two consecutive passes on one identical plan SHA-256:
+Author preflight is useful but never counts toward the two-review bar. On one digest it must:
 
-1. **Traceability:** every outcome clause maps to N/G gates; every 2630 failure is rejected or tested;
-   every state change names ownership, rollback, and evidence.
-2. **False-pass:** attempt passes using a dedicated thread, manual prompt, unread-only lookup,
-   duplicate claim, visual identity, stale task, truncated row, second consumer, or summary-only turn.
-   A named assertion must reject each.
+1. trace every outcome clause and every Assay L1-L10 finding to a named N/G assertion;
+2. attempt false passes using a dedicated/lookalike thread, self-reported identity, manual prompt,
+   chat-only “work,” unread-only lookup, expired lease, stale writer, poison row under ARMED, second
+   consumer, hostile authority text, disabled task, and summary-only turn;
+3. reproduce the checks, not only the plan digest, with unique expected-failure markers.
 
-A wrong-architecture/false-pass finding resets the count after correction. Cosmetics are disclosed.
-Record digest, reviewer, timestamp, checks, and findings in a separate artifact so evidence does not
-change plan bytes.
+After preflight, commit/push the plan-only branch and send Assay the exact returned commit SHA plus
+plan digest. A load-bearing finding changes the digest and resets the Assay count. Two consecutive
+Assay-CLEAN reviews must use the exact unchanged digest. Only then may N0 begin. N0-N3 must still pass
+before implementation; clean plan review is not implementation approval.
 
-After INTERNAL GOLDEN: commit/push the plan-only branch and send Assay exact commit + digest. Assay
-independently attacks N0–N3, identity proof, transaction semantics, supported-surface claim, outcome
-traceability, and false-pass resistance. A load-bearing finding returns to draft and requires a new
-digest/two passes. Only Assay CLEAN opens N0. N0–N3 must still pass before implementation; clean plan
-review is not implementation approval.
-
-## 10. Non-goals and exit
+## 11. Non-goals and exit
 
 No withdrawn-controller migration; no instant/event-driven claim for polling; no universal transport;
-no autonomy outside an explicitly armed chat and existing authority; no mail-as-command authority; no
-merge/publish/production change during plan approval.
+no autonomy outside an explicitly armed chat and existing authority; no mail-as-command authority;
+no merge/publish/production change during plan approval.
 
-Planning ends when this document is internally golden, its reproducible gate artifact is committed,
-the plan-only branch is pushed, Assay returns CLEAN or NOT CLEAN on the frozen commit, memory points to
-that verdict/next gate, and production remains untouched.
+Planning ends when this document passes author preflight, its gate artifact is committed, the branch
+is pushed, Assay records two consecutive CLEAN reviews on the exact digest, memory points to the
+verdict/next gate, and production remains untouched.

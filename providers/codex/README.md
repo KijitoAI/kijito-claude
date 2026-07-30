@@ -1,4 +1,10 @@
-# Codex provider — Kijito hive wake consumer
+# Codex provider — withdrawn dedicated-thread notifier
+
+> **Do not install, upgrade, migrate, or describe this provider as same-chat continuation.** Live
+> message 2630 proved that it can notify a dedicated app-server thread while leaving the user's
+> working chat idle. PR #5 is closed as withdrawn. The replacement is still plan-only and gated in
+> [`same-chat-continuation-plan.md`](same-chat-continuation-plan.md); it authorizes no implementation
+> or production change.
 
 The `codex` provider of [kijito-claude](../../README.md). QA-gated implementation of the four-gate
 release in [`codex-kijito-parity-plan.md`](codex-kijito-parity-plan.md) — a document RECORDED here
@@ -9,8 +15,9 @@ This provider consumes the shipped Kijito monitor's per-persona event stream and
 Codex app-server thread. It does not install hooks, plugins, LaunchAgents, model catalogs, or changes
 to the ordinary Codex home.
 
-Production is an explicit, isolated install: one private root and one launcher. Nothing starts at
-login, and the installer refuses to overwrite an existing target.
+The remaining sections describe the withdrawn research artifact for provenance and review only.
+Production previously used an explicit, isolated install: one private root and one launcher. Nothing
+starts at login, and the installer refuses to overwrite an existing target.
 
 ## Layout
 
