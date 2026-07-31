@@ -1,5 +1,9 @@
 # kijito-claude
 
+> **Codex dedicated-thread provider withdrawn:** do not install with `--provider codex`. Live message
+> 2630 proved it does not wake the user's already-running session. Its replacement remains plan-only
+> in [`providers/codex/same-chat-continuation-plan.md`](providers/codex/same-chat-continuation-plan.md).
+
 Tools for Claude Code sessions to track their own context window and, optionally, run unattended.
 A session can catch up on memory at startup, report how much of its context window is actually in
 use, and recycle its context at high usage without losing the working state. It uses
@@ -45,13 +49,13 @@ its own installer and its own install location.
 ```bash
 ./install.sh --list-providers
 ./install.sh                      # claude (default) -> ~/.claude
-./install.sh --provider codex     # codex  -> ~/.local/share/codex-kijito-hive + ~/.codex/skills
+./install.sh --provider codex     # WITHDRAWN notifier; do not install (skills-only remains available)
 ```
 
 | provider | what it installs | where | needs |
 |---|---|---|---|
 | `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |
-| `codex` | a hookless hive-wake controller that supervises its own `codex app-server`, plus the two skills | `~/.local/share/codex-kijito-hive`, launcher in `~/.local/bin` | Node 20+, a Codex binary |
+| `codex` | **WITHDRAWN notifier; not same-running-session wake. Do not install.** Skills remain available separately. | historical root: `~/.local/share/codex-kijito-hive` | Node 20+, a Codex binary |
 
 The wake protocol both providers rely on — event-line validation, the injection-fenced wake text,
 read-offset persistence, and the single-consumer lock — lives once in `providers/_shared/wake-core.mjs`.
@@ -71,7 +75,7 @@ pipx run kijito-claude  # via PyPI  (uvx kijito-claude also works)
 Both package runners do the same thing as the from-source install: they bundle every provider's
 payload and run `install.sh`, which defaults to the Claude provider. They need `bash`, so on Windows
 run them inside WSL (see Platform support). Pass provider flags straight through, e.g.
-`npx kijito-claude --provider codex`.
+`npx kijito-claude --provider codex` (withdrawn notifier; do not use except `--skills-only`).
 
 The Claude installer copies the scripts to `~/.claude/`, deploys the skills to `~/.claude/skills/`, drops
 the CLAUDE.md doctrine snippet alongside them, and merges the keys it needs into `settings.json`. It

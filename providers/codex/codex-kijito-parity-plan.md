@@ -1,6 +1,6 @@
 # Codex Kijito parity: bounded C1-C4 release plan
 
-Status: **C1 GREEN; C3 PRE-IMPLEMENTATION GATE**
+Status: **WITHDRAWN — message 2630 disproved same-running-session wake; this historical plan does not authorize installation. See `same-chat-continuation-plan.md`.**
 
 Date: 2026-07-28
 

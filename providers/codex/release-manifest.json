@@ -16,7 +16,7 @@
     "controllerSha256": "6f52ab6dc041778770449c36dc54529745beb082842a936b93d972d7e51add64",
     "wakeCoreSha256": "39632d1184827b1c356d359086e505a76e6e3f6b29b4d6681b59189324afbf75",
     "controllerTestsSha256": "98cccbbdfeb7799c08c4c8bc1282c783ff92ca6e8d76a43a2b7d0f8e32fd7503",
-    "planSha256": "b1fc0953d94b1e9712097dd382b32360d57f09815cc47a3be591c8000c819537"
+    "planSha256": "6ecb4d1db7d2db9ab55e8c2d08c8aeac14b8eb5cb4cf55dbf0f1da975b8f8daf"
   },
   "ownedPaths": [
     "~/.local/share/codex-kijito-hive",

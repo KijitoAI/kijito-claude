@@ -299,7 +299,7 @@ try {
   // install deliberately refuses to touch.
   const result = options.skillsOnly
     ? { status: "SKILLS_INSTALLED", skillsRoot: options.skillsRoot, skills: installSkills(options) }
-    : install(options);
+    : (process.stderr.write("WITHDRAWN: dedicated-thread notifier is not same-running-session wake; do not install for continuation. See same-chat-continuation-plan.md.\n"), install(options));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 } catch (error) {
   process.stderr.write(`${error.stack ?? error.message}\n`);

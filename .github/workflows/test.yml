@@ -38,6 +38,12 @@ jobs:
       - name: shared doctrine across every provider
         run: bash tests/conformance_test.sh --selftest
 
+      - name: codex same-chat plan author lint
+        run: providers/codex/test/same-chat-plan-preflight.sh
+
+      - name: codex disposable N0 harness adversarial suite
+        run: node --test providers/codex/test/n0-harness.test.mjs
+
       - name: codex controller + packaging suites
         run: |
           node --test providers/codex/test/codex-hive-watch.test.mjs \
@@ -86,6 +92,9 @@ jobs:
                    providers/codex/install.mjs \
                    providers/codex/controller.mjs \
                    providers/codex/release-manifest.json \
+                   providers/codex/n0-harness/README.md \
+                   providers/codex/n0-harness/evidence-manifest.mjs \
+                   providers/codex/test/n0-harness.test.mjs \
                    providers/codex/test/codex-hive-watch.test.mjs \
                    providers/codex/skills/kijito-qa-memory/agents/openai.yaml \
                    providers/_shared/wake-core.mjs; do
@@ -105,6 +114,8 @@ jobs:
               "kijito_claude/_assets/providers/claude/skills/kijito-qa-memory/SKILL.md",
               "kijito_claude/_assets/providers/codex/install.mjs",
               "kijito_claude/_assets/providers/codex/controller.mjs",
+              "kijito_claude/_assets/providers/codex/n0-harness/evidence-manifest.mjs",
+              "kijito_claude/_assets/providers/codex/test/n0-harness.test.mjs",
               "kijito_claude/_assets/providers/codex/test/codex-hive-watch.test.mjs",
               "kijito_claude/_assets/providers/_shared/wake-core.mjs",
           ]

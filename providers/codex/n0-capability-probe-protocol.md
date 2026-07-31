@@ -1,0 +1,472 @@
+# Codex same-chat continuation N0 capability-probe protocol
+
+Status: **PROTOCOL DRAFT — NO PROBE ACTION AUTHORIZED.**
+
+This protocol operationalizes only N0a and N0b of
+`same-chat-continuation-plan.md`. It is not provider code, a task prompt, a doctor implementation,
+an installation, or permission to create a Scheduled task. Assay must complete two consecutive
+zero-finding reviews from different angles on the exact unchanged protocol digest before Codex
+prepares a test harness or asks Jason to perform the first attended marker action. Assay must then
+complete the same two-consecutive-review gate on the frozen harness before any Scheduled task is
+created.
+
+Plan authority:
+
+- PR #6 plan commit: `68a2ad85acac88fbfa785bd3026575a73b156f80`
+- reviewed plan SHA-256: `3d11d5e0defd248e3a26d12ddb073fdd337acf8f38df785a204fbd2e0f22afac`
+- Assay plan reviews: round 6 CLEAN at `0ec3f8b`, round 7 CLEAN at `247b31d`
+- authority opened by those reviews: disposable N0a/N0b capability probes only
+
+Current pre-probe observations, recorded 2026-07-30:
+
+- macOS `26.4.1` (`25E253`)
+- ChatGPT desktop `26.721.30844` build `5813`
+- bundled `codex-cli 0.145.0`
+- installed `0.145.0` permission branch measured before this revision: `codex sandbox -P :workspace`
+  remained able to write cwd, `/private/tmp`, and `$TMPDIR` even when legacy
+  `sandbox_workspace_write.exclude_*` overrides were supplied, so that combination is rejected;
+  a named profile extending `:workspace` with `:tmpdir = "deny"` and `:slash_tmp = "deny"` kept the
+  disposable cwd write GREEN and made both temp canaries fail `Operation not permitted` (exit 1)
+- the CLI result proves the installed local sandbox primitive only; N0a-W must independently prove
+  that the ChatGPT Scheduled surface selects and preserves the same named profile, otherwise RED
+- the loaded user config currently has SHA-256
+  `8bd92cc0d0305e71f81bf11ed196c3f2bd2461954260b113c4ea19fdf7f2f7fc` and contains legacy
+  `sandbox_mode = "workspace-write"`; no managed `allowed_permission_profiles` source was found
+- official `0.145.0` documentation says any loaded `sandbox_mode` selects the legacy sandbox branch,
+  so the project-local profile is not presumed effective: if the desktop does not expose and apply
+  `n0-workspace` as a named/custom session permission, N0a-W is RED before any Scheduled task runs;
+  ordinary config is not edited to manufacture eligibility
+- current official Codex manual SHA-256
+  `69bac3511f1d13a49b9a70bcafa9eae04e18376b65c17368e483dfc26c50e89d`
+- the manual says an in-chat Scheduled task returns to the same chat with its existing context,
+  supports minute intervals, can use chat-available skills/plugins, and runs unattended with the
+  selected local project/worktree and default sandbox; these are claims to test, not evidence that
+  this installation satisfies N0
+- legacy PID `38082` is alive and intentionally untouched; it is the withdrawn dedicated-thread
+  notifier and never counts as same-chat evidence
+
+## 1. Binary verdict and stop rules
+
+N0 has two independent verdicts, `N0A_GREEN|RED|BLOCKED` and
+`N0B_GREEN|RED|BLOCKED`. `N0_GREEN` requires both GREEN on one frozen protocol and one frozen harness.
+`BLOCKED` is never converted to GREEN by explanation, self-report, screenshot, or partial evidence.
+
+A mandatory case is RED when the installed product behaves contrary to the reviewed plan. It is
+BLOCKED only when an attended prerequisite was not performed or an external outage prevents a
+measurement. A procedural defect in the harness invalidates the affected run, changes the harness
+digest, and returns to Assay review before a fresh nonce and retry. Product RED is not retried under a
+different prompt until a new reviewed protocol explains why the changed prompt still tests the same
+property.
+
+Stop immediately and preserve read-only evidence if any of these occurs:
+
+- a task or run cannot be tied to the marker-pinned exact chat `T` by an app-owned artifact outside
+  the run;
+- the verifier finds zero or multiple marker matches;
+- a run starts in a new, standalone, newest, visually similar, or controller-owned chat;
+- task creation, inspection, pause, resume, or deletion would require UI/accessibility automation,
+  a private protocol, transcript mtime guessing, `thread/resume`, `thread/injectItems`, or steering;
+- the effective cwd, project/worktree, model, sandbox, approval mode, permission profile, skill/plugin,
+  or MCP availability differs from the pre-registered specimen;
+- a scheduled run mutates hive unread state, uses persona `codex` for anything except the one allowed
+  `mark_read=false` capability peek, or reads a mail body into the task prompt;
+- the exact Scheduled run record, run/turn ID, or independent rollout evidence required by the plan
+  is unavailable;
+- the legacy controller, its lock, ordinary Codex config/auth, production Kijito state, or a
+  non-disposable workspace would be changed.
+
+No result from this protocol authorizes provider/server implementation, N1-N3, merge, install,
+migration, River's provider-neutral API work, legacy-controller restart, or production cutover.
+
+## 2. Roles, isolation, and evidence custody
+
+The attended operator performs only documented ChatGPT desktop controls and explicitly identified
+screen-lock/sleep actions. Codex prepares prompts and read-only verifier commands but never drives the
+UI. The outside verifier is a separate local process that is not a Scheduled run and does not use the
+run's prose as evidence.
+
+The PR review worktree is never the Scheduled task's project and is never inside that task's intended
+writable scope. A newly created specimen has two separated roots:
+
+- `/Users/jason/N0-Probes/<probe-id>/project/` is a dedicated detached disposable git worktree
+  created from the reviewed commit solely for N0; its whole
+  `/Users/jason/N0-Probes/<probe-id>/` tree is treated as disposable, contains no user work, and the
+  exact `project/` path is selected for every task;
+- `/Users/jason/.local/state/codex-n0/<probe-id>/` is an owner-only outside-verifier control root,
+  created specifically for this probe, outside the task's selected project and ordinary temporary
+  writable roots, and holds the frozen specimen and evidence.
+
+Owner-only mode is not treated as separation because the Scheduled process runs as the same OS user.
+Across every eligible run the outside verifier seals the control directory non-traversable (`000`),
+keeps comparison state in memory or through already-open descriptors, and restores access only after
+the run is terminal. No secret-readable window may overlap task eligibility. N0a-W must prove the
+Scheduled run cannot read a named control canary or chmod, replace, rename, delete, or create anything
+in the sealed root. Any read or metadata/write success is RED.
+
+Before relying on this separation, a negative preflight must prove that a run with the exact selected
+project and sandbox can read the registered fixture in the disposable project but cannot read or
+change the sealed control canary and cannot create a randomized canary in the control root or PR
+review worktree. It must also prove every pre-existing file there, the ordinary Codex config/auth
+hashes, and the original
+`/Users/jason/Code/SideProjects/Codex/.codex/` tree remained unchanged. Any write to a non-disposable
+path succeeds => RED and all later cases stop. Prompt text and what the run happened to touch are not
+the boundary: verdicts use the effective granted profile plus denial probes. Any granted writable
+root other than the exact disposable `project/` is RED.
+
+The disposable project contains a pre-registered named permission profile `n0-workspace` that extends
+`:workspace`, grants no additional workspace root, and sets both `:tmpdir` and `:slash_tmp` to `deny`.
+The attended operator must be able to select that exact named/custom profile in the desktop
+permissions control before task creation. The profile lives only in the trusted disposable project's
+`.codex/config.toml`; ordinary Codex configuration is not changed. Because the current user config
+selects the mutually exclusive legacy sandbox branch, merely defining the project profile is not
+evidence that it is active. Absence of the named/custom selection, a warning that it was ignored, or
+effective evidence that remains on legacy `workspace-write` is an immediate N0a-W RED and no
+Scheduled task is created. If selection is available, N0a-W must still prove the effective run names
+that exact profile, keeps the exact cwd writable, and denies randomized canaries in both
+`/private/tmp` and the host `$TMPDIR`. Ignoring either deny, adding another writable root, or making
+the cwd unwritable is RED.
+
+The successful installed-CLI primitive measurement used these exact UTF-8 `config.toml` bytes
+(including the final newline), SHA-256
+`a3546800038c3c90a69ea7c45926cc9f12739e66fcf05f97feaf3a03299b54b8`:
+
+```toml
+default_permissions = "n0-workspace"
+
+[permissions.n0-workspace]
+extends = ":workspace"
+
+[permissions.n0-workspace.filesystem]
+":tmpdir" = "deny"
+":slash_tmp" = "deny"
+```
+
+The isolated layout placed that file at
+`/Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/codex-home/config.toml` and used the
+separate non-temp workspace
+`/Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/project/`. The tested binary was
+`/Users/jason/.codex/packages/standalone/releases/0.145.0-aarch64-apple-darwin/bin/codex`, reported
+`codex-cli 0.145.0`, and had SHA-256
+`1da3f4e0e96028b8a771814293c3033dafd1971f943f6c7e79b0897fe705f590`. The exact three commands were:
+
+```sh
+/usr/bin/env CODEX_HOME=/Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/codex-home /Users/jason/.codex/packages/standalone/releases/0.145.0-aarch64-apple-darwin/bin/codex sandbox -P n0-workspace -C /Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/project -- /usr/bin/touch /Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/project/inside
+/usr/bin/env CODEX_HOME=/Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/codex-home /Users/jason/.codex/packages/standalone/releases/0.145.0-aarch64-apple-darwin/bin/codex sandbox -P n0-workspace -C /Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/project -- /usr/bin/touch /private/tmp/n0-advp-round4-slash-tmp
+/usr/bin/env CODEX_HOME=/Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/codex-home /Users/jason/.codex/packages/standalone/releases/0.145.0-aarch64-apple-darwin/bin/codex sandbox -P n0-workspace -C /Users/jason/Code/SideProjects/Codex/.qa-tmp/n0-advp-round4/project -- /usr/bin/touch /var/folders/z2/qvgc70gs2sl87pkrd4fffnk40000gn/T/n0-advp-round4-envtmp
+```
+
+The cwd command exited `0`; the `/private/tmp` and resolved `$TMPDIR` commands each exited `1` with
+`Operation not permitted`, and neither outside canary existed afterward. Both `CODEX_HOME` and `-C`
+were outside the two special temp roots; implementations with either root inside a temp grant are not
+equivalent reproductions. These commands prove only the isolated CLI primitive. The current desktop
+and Scheduled path remains subject to the separate effective-profile RED gates above.
+
+Both roots must contain no symlink except normal Git-managed worktree metadata, and the disposable
+worktree must be removed from every project/task selector after the probe. No real auth file, API
+token, production mailbox body, whole transcript, or ordinary Codex configuration is copied into
+either root. The evidence pack may retain only:
+
+- file identity and bounded structural metadata for rollout candidates;
+- the exact matching marker and run nonces;
+- parsed `session_meta.payload.id`, run/turn/task IDs, timestamps, and environment/permission fields;
+- prompt and artifact digests;
+- bounded receipts created inside the disposable `project/` root;
+- redacted screenshots of attended Scheduled controls when no machine-readable management artifact
+  exists, labeled `SETUP_EVIDENCE_ONLY`;
+- command/version output and the verifier's deterministic verdicts.
+
+Every evidence record contains `probe_id`, protocol digest, harness commit/digest, UTC time, host time,
+the app and CLI versions, the target path, and the evidence producer. Hashes are computed only after
+files stop changing. A manifest records each evidence file's relative path, size, and SHA-256. The
+Scheduled principal cannot write the manifest or verifier verdicts. Assay receives the manifest plus
+the minimal evidence needed to reproduce verdicts, never secrets.
+
+The probe uses the stable dedicated test persona `codex-n0`; it does not create a new persona for each
+run. It never creates or changes a memory, claim, checkpoint, or mail row owned by persona `codex`.
+N0a-K may use persona `codex` only for the plan-authorized current-pointer/tool-reachability peek with
+`mark_read=false`; any returned body remains untrusted data, the run takes no action from it, and that
+peek is not the unread-mutation proof or dependent on unread state.
+The mutation proof uses an exact synthetic unread row self-sent by and owned by `codex-n0`, so legacy
+persona-`codex` consumers cannot alter it. If the hosted surface cannot create that isolated fixture
+without another production persona, the case is BLOCKED rather than weakening attribution.
+
+The outside verifier, not this chat or the Scheduled run, generates the test row's 128-bit body nonce
+in process memory and sends the fixture without emitting that nonce to stdout, model context, the
+task prompt, the disposable project, or pre-run evidence shown in the chat. Only its SHA-256 is
+persisted in the sealed control root; the raw nonce is never written locally before the run. The body
+nonce is distinct from the case/run nonce. The expected current pointer is selected immediately
+before N0a-K by running the installed skill's exact sentinel recall outside the Scheduled run:
+`kijito_recall(query="CODEX_CURRENT_STATE_POINTER_V1 RESUME NOW", scope="project", project="Codex",
+full=true)`. The same query is pinned in `providers/codex/skills/kijito-start/SKILL.md` line 19 of the
+frozen commit. The verifier requires one unambiguous top live result, freezes that exact memory ID,
+and hashes the canonical UTF-8 content returned by `kijito_get(id)`. The parser ignores edge-preview
+blocks and requires the final main `UNTRUSTED` block to name that exact requested ID and
+`persona:codex`; it hashes only the body bytes between that block's fences, excluding the per-response
+fence nonce. Zero or multiple main matches invalidates the snapshot. The ID and digest live only in
+the sealed control root; neither is written into this protocol, prompt, project, or chat before the
+run. The outside verifier re-fetches that exact ID after the run and requires the same digest. A
+pre/post mismatch invalidates the case and requires a fresh snapshot; this protocol claims no Kijito
+lease primitive.
+
+## 3. Frozen specimen and outside-verifier contract
+
+Before the first attended action, the reviewed harness must generate and freeze `specimen.json` in
+the outside-verifier control root with:
+
+- a random 128-bit `probe_id` and separate verifier-generated 128-bit nonces for every case;
+- exact disposable target worktree path, device/inode, git HEAD, clean status, and permission profile;
+- exact PR review-worktree and verifier-control paths that must remain outside the task's writable
+  roots, plus the named write-denial canaries used to prove the separation;
+- model and reasoning selection, sandbox mode, approval mode, network allowance, and permitted tools;
+- exact `n0-workspace` profile bytes/digest, resolved `:slash_tmp` and `:tmpdir` paths, zero additional
+  workspace roots, and the registered cwd/temp/sibling denial canaries;
+- the full candidate task prompt bytes and SHA-256 for every scheduled case;
+- the intended minute boundary and acceptable host/server skew;
+- the pre-action rollout snapshot and the bounded parser version/digest;
+- explicit expected IDs that are known before each run; a run may fill only fields that cannot exist
+  before scheduling, and the attended operator must record those through documented controls before
+  the first eligible run.
+
+The rollout snapshot walks only real, owner-matching files beneath the documented app-owned Codex
+session root. It records path, device, inode, size, and first-record structural type without treating
+mtime or newest-path order as identity. After Jason submits a marker, the verifier searches only files
+created or advanced beyond the frozen snapshot, within a bounded byte range. Exactly one candidate
+must contain the exact marker nonce in a user turn and must begin with a valid
+`session_meta.payload.id`. That ID is `T`. The marker proves only `T`; it does not prove a scheduled
+run belongs to `T`.
+
+For every scheduled run, the outside verifier independently requires all of:
+
+1. the Scheduled control record captured by the attended operator identifies the pre-registered task
+   and run;
+2. one app-owned rollout beginning with `session_meta.payload.id == T` contains the corresponding
+   Scheduled run/turn identity and pre-registered run nonce;
+3. the rollout's cwd/project/worktree, model, sandbox, approval, and permission evidence equals the
+   frozen specimen;
+4. any disposable receipt is attributable to the same run/turn ID and nonce;
+5. the run neither steered an active turn nor relied on its own statement that it was in the right
+   chat.
+
+If the installed build exposes no machine-readable Scheduled run record or no independent binding
+between that record and the app-owned rollout, the case is RED. A screenshot can establish what the
+operator selected, but cannot replace the run binding.
+
+## 4. N0a case matrix
+
+Each case uses a fresh nonce. A prior run, duplicate Scheduled firing, or late completion bearing an
+old nonce cannot satisfy a later case.
+
+### N0a-M — marker pins the exact chat
+
+1. Freeze the rollout snapshot and marker nonce outside ChatGPT.
+2. Ask Jason to submit exactly one attended marker turn in the intended existing chat.
+3. Resolve `T` with the outside-verifier contract above.
+
+GREEN requires exactly one matching rollout and one `session_meta.payload.id`. This is the first user
+action and is requested only after protocol and harness QA are CLEAN.
+
+### N0a-W — disposable write-boundary proof
+
+Before trusting any later case, a scheduled run bound to `T` reads the registered fixture in
+disposable project, attempts to read and chmod one named sealed-control canary, and attempts only
+randomized, previously nonexistent canary paths in the control root, PR review worktree, a sibling of
+the exact disposable project, `/private/tmp`, and the resolved host `$TMPDIR`. Every control
+read/metadata/write attempt and every out-of-project create must be denied while one registered cwd
+receipt succeeds. The outside verifier hashes all pre-existing config/auth, original-workspace
+`.codex`, and review-worktree files before and after and requires them unchanged; no write is attempted
+against a real config/auth path. Verdict is based on the granted `n0-workspace` profile and every
+canary, not on a claim that an untested broad root happened to remain untouched. If an out-of-project
+canary is unexpectedly created, the outside verifier records RED, removes only that exact randomized
+canary after ownership/path verification, and stops N0. The probe never attempts to replace, rename,
+or delete a real config, auth, source, or evidence file.
+
+### N0a-B — baseline after a completed manual turn
+
+Create a disposable one-minute in-chat task through documented controls. Its frozen prompt returns
+the case nonce and reads only structural evidence needed to prove the specimen environment. It makes
+no file, mailbox, configuration, or external-state mutation. Run identity and every environment field
+must match `T` and the specimen. Any standalone/new chat or unavailable run binding is RED.
+
+### N0a-Q — scheduled input during an active manual turn
+
+Jason starts a bounded manual turn in `T` so it spans the next registered minute boundary. The
+scheduled task becomes eligible during that turn. GREEN requires the scheduled input to queue, start
+only after the manual turn releases ownership, retain its own registered run identity, and show no
+`turn/steer` or merged disposition. Overlap, steering, lost run, or wrong chat is RED.
+
+### N0a-O — two tasks forced to overlap
+
+Two disposable in-chat tasks target the same registered minute. Task A owns a pre-created disposable
+75-second barrier; task B becomes eligible while A is active. The barrier and atomic collision receipt
+are test fixtures, not provider code, and the 75-second duration is the plan's explicit synthetic
+exception to the 45-second production slice cap.
+
+GREEN requires exactly one task to hold the fixture's winner token and act, while the other produces
+an independently attributable collision receipt without steering, overwriting the winner, or making
+a disposition. The verifier must distinguish provider scheduling from the fixture's own exclusion;
+the forced concurrent eligibility is expected, but both tasks performing the registered action or
+either task steering/overwriting is RED even when a later file-state snapshot looks singular.
+
+### N0a-I — inactive/backgrounded desktop
+
+With the app running but backgrounded and Jason inactive for at least ten minutes, one pre-registered
+run must start within 90 seconds of eligibility and satisfy the full run binding. Foregrounding the app
+or manually prompting to make it start invalidates the case.
+
+### N0a-L — locked screen
+
+With the computer awake, app running, and screen locked across the eligible boundary, one
+pre-registered run must start within 90 seconds and satisfy the full binding. The operator records
+lock and unlock times; visual notification alone is not evidence.
+
+### N0a-K — installed Kijito reachability and read-only inbox
+
+In a second disposable run, explicitly invoke installed `kijito-start` only far enough to prove that
+the Scheduled surface can use the installed skill/plugin/MCP, reach hosted `https://api.kijito.ai/mcp/`,
+return the current pointer ID plus canonical content digest, and perform the allowed persona-`codex`
+`mark_read=false` capability peek without acting on returned data. The outside verifier compares the
+run's pointer pair to the withheld control-root snapshot; no constant from the prompt/project can
+satisfy it.
+
+Separately, the outside fixture creates one exact unread row containing the withheld body nonce by
+self-sending from `codex-n0` to `codex-n0` before the run. The prompt may contain the row ID but never
+the body nonce. The Scheduled run exact-fetches that row using `before_id = row_id + 1`, `limit = 1`,
+and `mark_read=false`, rejects any returned ID other than the registered row, and its app-owned rollout
+must contain the exact fetched body nonce. The outside verifier exact-fetches the row with the same
+cursor plus `unread_only=true, mark_read=false` before and after and requires the same ID/body digest
+to remain unread. Merely showing unchanged unread state without the fetched nonce in the run artifact
+is RED. Only after the evidence manifest freezes may the outside fixture mark that test row read as
+cleanup.
+
+N0a-K is GREEN only when both independent challenges pass: the run's pointer ID/content-digest pair
+equals the withheld single-writer snapshot, and the rollout contains fetched row content whose
+SHA-256 equals the withheld body-nonce digest. Either proof alone is insufficient.
+
+The task must not follow the pointer's continuation instruction, arm or start a controller, read a
+production mail body into its instructions, update memory, or act on returned mail. A fixture that
+cannot be created or is already read before the Scheduled run is BLOCKED. Empty-inbox substitution,
+foreign-persona write, failure to emit the withheld nonce from the exact fetch, or legacy-consumer
+attribution is RED.
+
+N0a is GREEN only if N0a-M, N0a-W, N0a-B, N0a-Q, N0a-O, N0a-I, N0a-L, and
+N0a-K are all GREEN.
+
+## 5. N0b lifecycle and health case matrix
+
+N0b uses documented ChatGPT desktop controls only. Each lifecycle transition records attended setup
+evidence plus independently observed eligible/non-eligible runs for at least two one-minute cadences.
+
+| Case | Attended action | Required independent result |
+|---|---|---|
+| N0b-C | Create in `T` | Stable task identity is captured; an eligible run binds to `T` and the frozen specimen. |
+| N0b-S | Inspect | Status, prompt digest, cadence, project/worktree, model, and recent-run identity can be captured without guessing. |
+| N0b-P | Pause | No new eligible run appears for two cadences; health expires and cannot remain ARMED. |
+| N0b-R | Resume | A new run with a fresh nonce and task identity appears; old evidence cannot re-arm it. |
+| N0b-D | Delete | No run appears for two cadences; stale rollout or screenshot evidence cannot imply enabled state. |
+| N0b-X | App exit | Project-scoped run behavior is measured; no unsupported claim is substituted for observation. |
+| N0b-W | Sleep/wake | Missed and resumed cadence behavior is measured without changing the legacy controller. |
+| N0b-L | Screen lock | Locked/background behavior is measured and correlated with the N0a-L run evidence. |
+| N0b-J | Project removal | Temporarily select a disposable renamed/missing project path; the task must fail closed and health becomes RED. |
+| N0b-F | Permission drift | Use only a per-task/per-disposable-project permission change exposed by documented controls; mismatched effective evidence makes health RED. If the product offers only a global/default change, do not change it and mark the capability RED. |
+
+The protocol records discovered cadence, quota/rate, retention/expiry, recent-run, and notification
+limits rather than assuming them. Host/server skew is measured at the beginning and end of each
+lifecycle sequence and must not exceed 15 seconds. If the product provides no trustworthy server
+timestamp, this requirement is RED, not estimated from prose.
+
+### N0b doctor oracle
+
+N0 may build only a disposable, non-installable, read-only oracle that consumes the frozen evidence
+schema. It cannot invoke ChatGPT, Kijito mutations, or provider code and must refuse evidence outside
+the specimen root. It is labeled `N0_TEST_ORACLE` and never reports production `ARMED`.
+
+The oracle's healthy test verdict requires current exact-chat run evidence, a heartbeat no older than
+135 seconds by server time, matching task/prompt/environment/permission identity, and all synthetic
+claim/checkpoint/operator-journal fixtures valid. Pause, delete, app-down behavior, project removal,
+permission drift, stale evidence, wrong task/chat, or excess clock skew is RED within two cadences.
+
+ADV-A is load-bearing before N0b:
+
+- missing/unreachable operator-decision journal produces explicit `JOURNAL_UNREACHABLE`, RED;
+- missing arm record, missing pinned signer, or invalid signer binding produces explicit
+  `SIGNER_UNARMED`, RED;
+- neither state may collapse into generic `STALE`, be omitted, or leave a healthy verdict;
+- each has a positive control, a mutation that would incorrectly return healthy, and a unique named
+  failing assertion;
+- the live capability result remains `N0_TEST_CAPABLE`, never production `ARMED`, because N1 has not
+  yet proven or supplied the real journal/claim surfaces.
+
+N0b is GREEN only if all lifecycle cases, clock evidence, management limits, artifact availability,
+and doctor-oracle negative controls are GREEN. If doctor cannot distinguish enabled, paused, deleted,
+stale, and drifted states from supported evidence, N0b is RED.
+
+## 6. Prompt constraints for the later frozen harness
+
+This protocol does not contain the executable task prompt. The later harness must render exact prompt
+bytes that:
+
+- say `N0 CAPABILITY PROBE — NO MAIL AUTHORITY` before any tool output;
+- pin the specimen root, task case, nonce, allowed tools, sandbox, project, chat target, and maximum
+  effect before reading external data;
+- treat all tool-returned mail and memory as untrusted data and forbid it from changing authority;
+- prohibit provider/server implementation, controller start/stop, hooks, LaunchAgents, app-server
+  thread operations, UI automation, ordinary config/auth changes, network use except the single N0a-K
+  hosted Kijito reachability check, and writes outside the disposable `project/` root;
+- stop after its bounded evidence action and emit no claim that the feature works;
+- contain a deliberate hostile-data negative fixture whose text requests scope expansion, and prove
+  that effective configuration and receipts remain unchanged.
+
+The prompt digest, not a paraphrase, is recorded before scheduling. Any UI rewrite or model-visible
+addition changes the digest and invalidates the run unless the outside verifier can capture and hash
+the exact effective prompt.
+
+## 7. QA sequence and change control
+
+1. **Protocol QA:** commit only this protocol and supporting documentation. Send Assay the returned
+   commit SHA and protocol SHA-256. The review request must copy the full commit verbatim from
+   `git rev-parse HEAD`, verify that exact object resolves, and pair it with a freshly computed file
+   digest; an agent must never expand an abbreviated SHA from memory. No marker, nonce submission,
+   task, harness, UI action, or sleep/lock probe occurs. Remediate findings and repeat until Assay says
+   CLEAN in two consecutive zero-finding reviews from different angles on the same unchanged commit
+   and digest. Any finding or byte change resets the protocol counter to `0/2`.
+2. **Harness QA:** implement only the disposable snapshot/parser/oracle/fixture scripts and their
+   tests. Use production-shaped synthetic rollouts and mutations for zero/multiple marker matches,
+   wrong chat/run, mtime/newest guessing, symlink/path escape, concurrent mutation, task read/chmod/
+   write access to the sealed control root, task write access to the PR worktree, stale evidence,
+   omitted `:tmpdir`/`:slash_tmp` deny, an extra writable root, wrong/unselected permission profile,
+   a missing out-of-tree temp canary, and legacy `sandbox_workspace_write` flags falsely accepted as
+   proof for the installed named-profile branch,
+   false healthy after pause/delete, live-brain checks that omit the withheld pointer digest or
+   fetched body-nonce digest, and specimens that leak an expected pointer ID/digest or raw body nonce
+   into the protocol, prompt, project, chat, or pre-run logs. Also mutate `JOURNAL_UNREACHABLE`,
+   `SIGNER_UNARMED`, absent test mail, already-read test mail, and concurrent
+   persona-`codex` mail mutation that must not affect the `codex-n0` oracle. Freeze one commit and
+   digest; Assay must complete two consecutive zero-finding reviews from different angles on those
+   exact unchanged bytes before the first attended action. Any finding or byte change resets the
+   harness counter to `0/2`.
+3. **Attended marker:** generate the one-use marker nonce, freeze the pre-snapshot, and ask Jason for
+   exactly one marker turn. If the attended marker is not submitted, N0a-M is BLOCKED; after one
+   confirmed submission, zero or multiple rollout matches is RED.
+4. **N0 execution:** perform cases in order N0a-M, N0a-W, N0a-B, N0a-Q, N0a-O,
+   N0a-I, N0a-L, N0a-K, then N0b-C, N0b-S, N0b-P, N0b-R, N0b-D, N0b-X, N0b-W,
+   N0b-L, N0b-J, N0b-F.
+   Check inbox between cases, update the current-state pointer after every terminal case, and do not
+   continue after a RED without Assay reviewing the evidence and ruling whether it is product RED or
+   harness invalidation.
+5. **Evidence QA:** freeze the manifest and results. Assay independently recomputes verdicts from the
+   evidence. Only an Assay-confirmed `N0A_GREEN` plus `N0B_GREEN` becomes `N0_GREEN`.
+
+Any change to a binary pass condition, identity source, prompt authority, evidence channel, test
+persona, lifecycle matrix, or RED threshold changes this protocol digest and returns to step 1.
+Formatting-only changes after protocol CLEAN are deferred until N0 evidence QA is complete.
+
+## 8. End state
+
+On GREEN, record only that the installed Scheduled surface is capable of supporting later N1-N3
+probes under the measured constraints. On RED, record the exact unsupported property and reject the
+candidate without implementing around it. On BLOCKED, record the missing attended/external
+prerequisite and preserve the unchanged authority boundary.
+
+In all three cases, delete the disposable Scheduled tasks through documented controls, verify two
+cadences without runs, retain the minimal redacted evidence manifest, leave legacy PID `38082`
+untouched, and update memory and River/Assay mail with the exact verdict and remaining authorization.
