@@ -34,7 +34,7 @@ Run the adversarial suite with a healthy Node 18+ runtime:
 node --test providers/codex/test/n0-harness.test.mjs
 ```
 
-The suite includes every mutation floor in protocol section 7 plus Assay round-5 hostile fence and
-run-nonce user-span controls. Passing this local suite is author evidence only. The exact unchanged
-harness commit and manifest digest still require two consecutive zero-finding Assay reviews before
-any attended marker or Scheduled action.
+The suite includes every mutation floor in protocol section 7, isolated counterexamples for every
+oracle guard binding, and Assay round-5 hostile fence and run-nonce user-span controls. Passing this
+local suite is author evidence only. The exact unchanged harness commit and manifest digest still
+require two consecutive zero-finding Assay reviews before any attended marker or Scheduled action.

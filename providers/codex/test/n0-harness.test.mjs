@@ -61,6 +61,13 @@ function mutateOracle(mutator, expectedStatus, expectedCode, oracleNow = NOW) {
   assert.equal(result.code, expectedCode);
 }
 
+function rebuildPrompts(specimen) {
+  for (const name of requiredCaseNames()) {
+    const utf8 = renderPrompt(specimen, name);
+    specimen.prompts[name] = { utf8, sha256: sha256(Buffer.from(utf8, "utf8")) };
+  }
+}
+
 test("valid frozen specimen and complete evidence yield only N0_TEST_CAPABLE", () => {
   const specimen = fixtureSpecimen();
   validateSpecimen(specimen);
@@ -212,6 +219,44 @@ test("specimen freezes unique per-case nonces, complete prompt digests, path cla
   }
 });
 
+test("specimen guard mutation floor isolates topology, identity, provenance, and boundary bindings", () => {
+  {
+    const bad = fixtureSpecimen();
+    bad.cases["N0a-W"].expected.chatSessionId = "019fb500-0000-7000-8000-00000000beef";
+    rebuildPrompts(bad);
+    expectCode(() => validateSpecimen(bad), "CASE_EXPECTED");
+  }
+  for (const key of ["taskId", "runId", "turnId"]) {
+    const bad = fixtureSpecimen();
+    bad.cases["N0a-B"].expected[key] = bad.cases["N0a-W"].expected[key];
+    rebuildPrompts(bad);
+    expectCode(() => validateSpecimen(bad), "CASE_EXPECTED");
+  }
+  {
+    const bad = fixtureSpecimen();
+    const first = bad.cases["N0a-W"].intendedBoundary;
+    bad.cases["N0a-W"].intendedBoundary = bad.cases["N0a-B"].intendedBoundary;
+    bad.cases["N0a-B"].intendedBoundary = first;
+    rebuildPrompts(bad);
+    expectCode(() => validateSpecimen(bad), "CASE_BOUNDARY");
+  }
+  {
+    const bad = fixtureSpecimen();
+    bad.target.gitHead = "c".repeat(40);
+    rebuildPrompts(bad);
+    expectCode(() => validateSpecimen(bad), "TARGET_HEAD");
+  }
+  {
+    const bad = fixtureSpecimen();
+    bad.paths.control = `${bad.paths.project}/nested-control`;
+    for (const name of ["control-read", "control-chmod", "control-create"]) {
+      bad.canaries[name].path = `${bad.paths.control}/${name}`;
+    }
+    rebuildPrompts(bad);
+    expectCode(() => validateSpecimen(bad), "PATH_SEPARATION");
+  }
+});
+
 test("exact deterministic prompts are hostile-data bounded and digest-covered", () => {
   const input = fixtureSpecimen();
   const built = buildSpecimen(input);
@@ -263,11 +308,25 @@ test("oracle rejects reordered cases, unknown evidence fields, and malformed dia
   mutateOracle(({ evidence }) => { evidence.cases["N0a-W"].receiptVerified = false; }, "RED", "RECEIPT_BINDING");
   mutateOracle(({ evidence }) => { evidence.cases["N0a-B"].runBindingVerified = false; }, "RED", "RUN_BINDING");
   mutateOracle(({ evidence }) => { evidence.cases["N0a-B"].expected.runId += "-wrong"; }, "RED", "CASE_BINDING");
-  mutateOracle(({ evidence }) => { evidence.cases["N0a-Q"].terminalAt = evidence.cases["N0a-B"].terminalAt; }, "RED", "CASE_ORDER");
+  mutateOracle(({ evidence }) => { evidence.cases["N0a-W"].terminalAt = "2026-07-30T22:20:00.000Z"; }, "RED", "CASE_ORDER");
+  mutateOracle(({ evidence }) => { evidence.cases["N0a-W"].terminalAt = "2026-07-30T22:10:59.000Z"; }, "RED", "CASE_ORDER");
   mutateOracle(({ evidence }) => { evidence.integrity.ordinaryConfig.postDigest = "f".repeat(64); }, "RED", "INTEGRITY_DRIFT");
   mutateOracle(({ evidence }) => { evidence.serverNowMs = NOW; }, "RED", "CLOCK_SKEW", Number.NaN);
   mutateOracle(({ evidence }) => { evidence.meta.utcTime = new Date(NOW - 15_001).toISOString(); }, "RED", "EVIDENCE_TIME");
   mutateOracle(({ evidence }) => { evidence.cases["N0a-M"].terminalAt = new Date(NOW + 1).toISOString(); }, "RED", "CASE_ORDER");
+});
+
+test("oracle guard mutation floor isolates every evidence-to-specimen binding", () => {
+  const mutations = [
+    [({ evidence }) => { evidence.probeId = "2".repeat(32); }, "PROBE_ID_MISMATCH"],
+    [({ evidence }) => { evidence.harnessDigest = "f".repeat(64); }, "ARTIFACT_DRIFT"],
+    [({ evidence }) => { evidence.heartbeatServerMs = NOW + 60_000; }, "STALE"],
+    [({ evidence }) => { evidence.pointer.runPointerId = evidence.pointer.pointerId + 1; }, "POINTER_CHALLENGE"],
+    [({ evidence }) => { evidence.mail.rowId += 1; }, "MAIL_CHALLENGE"],
+    [({ evidence }) => { evidence.cases["N0a-M"].nonce = "9".repeat(32); }, "CASE_BINDING"],
+    [({ evidence }) => { evidence.cases["N0a-M"].promptDigest = "f".repeat(64); }, "CASE_BINDING"],
+  ];
+  for (const [mutate, code] of mutations) mutateOracle(mutate, "RED", code);
 });
 
 test("marker selection requires exactly one changed rollout and one user-turn span", () => {
