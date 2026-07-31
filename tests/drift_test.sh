@@ -24,14 +24,55 @@ if [ ! -d "$DEST" ]; then
   exit 0
 fi
 
+# Modification time as a bare epoch integer, on both stat dialects.
+#
+# ⚠️ `stat -f %m || stat -c %Y` LOOKS like a correct portability fallback and is not, because the
+# two dialects do not merely spell the flag differently — THEY GIVE `-f` OPPOSITE MEANINGS. On BSD
+# /macOS `-f` is a format string; on GNU/Linux `-f` means "report the FILESYSTEM", which SUCCEEDS
+# and prints a multi-line block. So on Linux the first branch exits 0, the `||` never fires, and
+# the caller compares a paragraph of text with `-gt`: a shell error per call, and every drifted
+# file reported as "same mtime, different bytes".
+#
+# ★ The failure is silent in the direction that costs the most: "same mtime" is the ONE verdict
+# that tells the operator nothing, so a test whose whole job is to say WHICH SIDE TO FIX printed
+# the unactionable answer on every Linux host. The lesson is the general one — an exit code proves
+# a command RAN, never that it answered the question you asked. VALIDATE THE RESULT, not the status.
+_mtime() {
+  local t
+  t=$(stat -c %Y "$1" 2>/dev/null)                          # GNU/Linux
+  case "$t" in ''|*[!0-9]*) t=$(stat -f %m "$1" 2>/dev/null) ;; esac   # BSD/macOS
+  case "$t" in ''|*[!0-9]*) t=0 ;; esac                     # neither → refuse to guess
+  printf '%s' "$t"
+}
+
 # Report which side is newer, so the operator knows which direction to fix.
 newer() {
   local a="$1" b="$2" ta tb
-  ta=$(stat -f %m "$a" 2>/dev/null || stat -c %Y "$a" 2>/dev/null || echo 0)
-  tb=$(stat -f %m "$b" 2>/dev/null || stat -c %Y "$b" 2>/dev/null || echo 0)
-  if [ "$ta" -gt "$tb" ]; then echo "REPO NEWER      → this machine is stale; run ./install.sh"
-  elif [ "$tb" -gt "$ta" ]; then echo "INSTALLED NEWER → un-versioned work; copy into scripts/ and COMMIT it"
-  else echo "same mtime, different bytes"; fi
+  ta=$(_mtime "$a")
+  tb=$(_mtime "$b")
+  # 0 means _mtime could not read the timestamp on this host. Say so rather than reporting the
+  # two files as equally aged, which is what comparing 0 with 0 would otherwise assert.
+  if [ "$ta" = 0 ] || [ "$tb" = 0 ]; then
+    echo "bytes differ (mtime unreadable here — compare by hand)"; return
+  fi
+  # ⚠️ MTIME IS EVIDENCE, NOT A VERDICT — and it is biased in one direction. `install`/`cp` stamp
+  # the destination with the CURRENT time, so the installed copy is newer than the repo after ANY
+  # install, including one that deployed OLDER content (e.g. `npx kijito-claude` pulling the last
+  # published release onto a box whose checkout is ahead of it). Measured 2026-07-31: exactly that
+  # host reported "INSTALLED NEWER → un-versioned work; COMMIT it" for two skills whose repo
+  # versions were in fact the newer ones — advice that would have overwritten current work with
+  # stale published content.
+  #
+  # ★ So the honest output names the observation and the check that settles it, instead of a
+  # confident direction the timestamp cannot support. A wrong direction is worse than no direction:
+  # this test exists to be obeyed, and the remedy it names is destructive in one of the two cases.
+  if [ "$ta" -gt "$tb" ]; then
+    echo "repo mtime newer  → likely this machine is stale; run ./install.sh"
+  elif [ "$tb" -gt "$ta" ]; then
+    echo "install mtime newer → INCONCLUSIVE (any install refreshes it); check \`git log -1 --\` on the repo file before copying anything back"
+  else
+    echo "same mtime, different bytes"
+  fi
 }
 
 echo "== claude scripts: $REPO/providers/claude/scripts  vs  $DEST =="
