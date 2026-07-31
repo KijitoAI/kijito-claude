@@ -31,9 +31,20 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
      - ⚠️ **"UNREAD" IS NOT "UNHANDLED".** Peeking without consuming means a message you already acted on arrives looking new, so an inbox is a claim about the PAST while the tree is the PRESENT. Before a message becomes a task, check whether it is already done (`git log -S '<the defect string>'`, and compare the message's timestamp to the commit's).
    - **(b) Arm a LIVE wake-capable consumer — but IDEMPOTENTLY (arm at most once).** "Arm" means ongoing surfacing that re-invokes you per event, not a one-shot read. The wake-capable form is a persistent `Monitor` that streams each new event as a notification.
      - ⚠️ **Duplicate-arm trap (fix the cause here — this is why this step is idempotent):** `/clear` does NOT stop the prior session's monitor, and the `claude` process SURVIVES `/clear`. So this catch-up re-runs every session under the *same* process, and arming blindly ACCUMULATES monitors — each hive message then fires **N identical wake-notifications**, burning context (6 stacked ladybug monitors were observed over ~1 day). Always check-then-skip; never arm unconditionally.
-     - **Check first — is a live monitor already tailing your stream? ANCHOR THE PATTERN:**
+     - **First resolve WHERE your producer writes — the path differs per supervisor, and guessing it is a silent, permanent failure.**
        ```bash
-       pgrep -f "^tail -n 0 -F .*events\.<P>\.ndjson"   # ONE line per live monitor
+       # Whichever of these exists is your stream. Do not assume from the OS: ask the filesystem.
+       ls ~/.kijito-monitor/<P>.jsonl                        # systemd seats (Linux)
+       ls ~/.cache/kijito-inbox-monitor/events.<P>.ndjson    # launchd seats (macOS)
+       ```
+       ⛔ **THIS FILE USED TO NAME THE macOS PATH ONLY, AND THAT IS A FAILURE THAT NEVER ANNOUNCES ITSELF.** A `tail -F` on a
+       file that will never exist waits forever without erroring, and "no events" is indistinguishable from "no mail" — so the
+       agent reports itself armed, stays unreachable, and nothing ever contradicts it. **Measured 2026-07-31: three personas hit
+       this on one Linux seat in a single evening; one abandoned the tail and hand-built a REST poller instead.** ⇒ Substitute the
+       path you actually found for `$STREAM` below; if NEITHER exists, your producer is not running — see "Producer down" below.
+     - **Then check — is a live monitor already tailing your stream? ANCHOR THE PATTERN:**
+       ```bash
+       pgrep -f "^tail -n 0 -F .*$STREAM"   # ONE line per live monitor
        ```
        ⛔ **DO NOT use the unanchored `pgrep -f "events\.<P>\.ndjson"` — IT DOUBLE-COUNTS, and the
        old version of this file told you to kill things because of it.** `pgrep -f` matches the whole
@@ -43,11 +54,11 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
        "you already hit the trap" — and the remedy it prescribed would have killed a **working**
        inbox. Anchoring on `^tail` excludes the shell and returns exactly one line per monitor.
        - **prints nothing →** arm exactly ONE, wake-capable, via the Monitor tool (persistent):
-         `Monitor(command="tail -n 0 -F ~/.cache/kijito-inbox-monitor/events.<P>.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)`
+         `Monitor(command="tail -n 0 -F $STREAM | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)`
        - **prints one line →** already armed by a prior (pre-`/clear`) session; **STOP — do not start another.**
        - **prints two or more lines →** genuinely stacked; keep the newest, kill the rest:
          ```bash
-         ps -eo pid,etime,command | grep "^ *[0-9]* .*tail -n 0 -F .*events\.<P>\.ndjson" | grep -v grep
+         ps -eo pid,etime,command | grep "^ *[0-9]* .*tail -n 0 -F .*$STREAM" | grep -v grep
          # keep newest (smallest etime); kill the older tail pids and their parent shells.
          # TaskStop won't reach a prior session's task, so kill by pid here.
          ```
@@ -58,8 +69,8 @@ Run `kijito_startup(persona="<P>", project="<J>")` with the persona/project your
        orphan that cannot wake me" arms a second monitor and every hive message then fires **twice** —
        exactly the duplicate this step exists to prevent. The process is the ground truth; the task
        list is a view that `/clear` can empty without stopping anything.
-     - ⛔ **RUNNING IS NOT ARMED — verify the wake PATH, not just the process.** A pid proves something is alive; it does not prove events reach *you*. Three ways a live consumer still fails to wake you: the **producer** isn't writing (launchd `com.kijito.inbox-monitor` down — the stream goes silent, which is indistinguishable from "no mail"); the tail is on a **sibling persona's** stream; or the **filter** excludes the event kind you care about. Confirm the stream file for YOUR persona exists and is being appended to, then call it armed.
-     - **Producer down / no ndjson?** If `~/.cache/kijito-inbox-monitor/` isn't being fed (launchd `com.kijito.inbox-monitor` down), fall back to polling `kijito_hive_inbox(persona="<P>", unread_only=true)` via MCP on a cadence (hits whatever brain your MCP targets; the supervised producer normally bridges the remote/prod inbox into this local ndjson, so tailing it works even when your MCP points at `api.kijito.ai`).
+     - ⛔ **RUNNING IS NOT ARMED — verify the wake PATH, not just the process.** A pid proves something is alive; it does not prove events reach *you*. Three ways a live consumer still fails to wake you: the **producer** isn't writing (launchd `com.kijito.inbox-monitor` or systemd `kijito-inbox-monitor@<P>` down — the stream goes silent, which is indistinguishable from "no mail"); the tail is on a **sibling persona's** stream; or the **filter** excludes the event kind you care about. Confirm the stream file for YOUR persona exists and is being appended to, then call it armed.
+     - **Producer down, or NEITHER stream file exists?** ⚠️ **A producer running for a SIBLING persona does not cover you** — on a multi-persona seat, `pgrep` finds a producer while YOUR stream file is absent, which reads as healthy and is not. Confirm the file for YOUR persona exists. Restart yours with `systemctl --user enable --now kijito-inbox-monitor@<P>` (systemd) or `launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor` (launchd). While it is down, fall back to polling `kijito_hive_inbox(persona="<P>", unread_only=true)` via MCP on a cadence (hits whatever brain your MCP targets; the supervised producer normally bridges the remote/prod inbox into this local ndjson, so tailing it works even when your MCP points at `api.kijito.ai`).
    - This step runs every session — including after `/clear` — but because it is idempotent it arms at most one monitor across the whole life of the `claude` process.
    - **(c) river only — ALSO arm the prod-pager wake (adopted 2026-07-13, Jason's ask):** subscribe to the same ntfy topic the prod health monitor pages (so any pager event wakes the session for immediate investigation, even when the whole Kijito stack is down — ntfy is external). Same idempotence rule: check `pgrep -f "ntfy.sh/kijito-prod"` first; if nothing, arm exactly one persistent Monitor:
      `Monitor(command="while true; do curl -N -s --max-time 86400 https://ntfy.sh/kijito-prod-597f2c390b90/json 2>/dev/null | grep --line-buffered '\"event\":\"message\"'; sleep 10; done", persistent=true)`

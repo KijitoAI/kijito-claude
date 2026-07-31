@@ -43,12 +43,62 @@ for d in "${CLAUDE_PROJECT_DIR:-}" "$hook_cwd" "$PWD"; do
 done
 _safe=$(printf '%s' "$_persona" | sed 's/[^A-Za-z0-9._-]/_/g')
 
-# Producer health: a DOWN producer means no events will ever arrive, so arming is moot until it's
-# restarted — surface it rather than let a dead producer be silently assumed up.
-if pgrep -f "kijito_inbox_monitor.py" >/dev/null 2>&1; then
-  _prod="inbox-monitor producer: UP (launchd com.kijito.inbox-monitor)."
+# ── Producer topology. THE PRODUCER WRITES A DIFFERENT PATH ON EACH SUPERVISOR, and this script
+# used to hardcode the macOS one in all five places it appears. On a Linux seat that meant: a pgrep
+# for "kijito_inbox_monitor.py" that can never match the `kijito-inbox-monitor` console script, a
+# `launchctl` restart hint that means nothing under systemd, and Monitor templates pointing at
+# ~/.cache/kijito-inbox-monitor/events.<p>.ndjson while the producer writes ~/.kijito-monitor/<p>.jsonl.
+#
+# ⚠️ EVERY ONE OF THOSE FAILS TOWARD FALSE CALM. An agent that obeys the hint tails a file that will
+# never exist, and "no events" is indistinguishable from "no mail" — forever, with no error. Measured
+# 2026-07-31: three personas hit this on one Linux seat in one evening; one hand-built a REST poller
+# instead, and one was told "producer: DOWN" while the producer was up.
+#
+# DETECT, DON'T FORK ON `uname`. The question is not "what OS is this" but "where does the producer
+# on THIS box actually write", so ask the filesystem: an events file that exists is proof, and a
+# supervisor definition is the next-best evidence. uname is the last resort, not the first test.
+_mac_events="$HOME/.cache/kijito-inbox-monitor/events.${_safe}.ndjson"
+_lnx_events="$HOME/.kijito-monitor/${_safe}.jsonl"
+if   [ -n "$_safe" ] && [ -e "$_lnx_events" ]; then _events="$_lnx_events"; _sup="systemd"
+elif [ -n "$_safe" ] && [ -e "$_mac_events" ]; then _events="$_mac_events"; _sup="launchd"
+elif [ -d "$HOME/.kijito-monitor" ]; then          _events="$_lnx_events"; _sup="systemd"
+elif [ -d "$HOME/.cache/kijito-inbox-monitor" ]; then _events="$_mac_events"; _sup="launchd"
+elif [ -f "$HOME/Library/LaunchAgents/com.kijito.inbox-monitor.plist" ]; then _events="$_mac_events"; _sup="launchd"
+elif [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then _events="$_mac_events"; _sup="launchd"
+else _events="$_lnx_events"; _sup="systemd"; fi
+# The generic (no-marker) branch cannot name a file, so it shows the directory shape instead.
+case "$_sup" in
+  launchd) _events_tmpl="\$HOME/.cache/kijito-inbox-monitor/events.<persona>.ndjson" ;;
+  *)       _events_tmpl="\$HOME/.kijito-monitor/<persona>.jsonl" ;;
+esac
+
+# Producer health, PER PERSONA — because "a producer is running" and "YOUR mail is being collected"
+# are different facts, and on a multi-persona seat they come apart routinely. The old check asked
+# the host-global question and printed a per-persona answer.
+#
+# ⚠️ The pgrep pattern must not match the CONSUMER. On the macOS layout the tail's own path contains
+# the string "kijito-inbox-monitor", so a loose pattern reports the producer UP whenever any agent is
+# merely tailing — a false green in the one direction that matters. Anchor on how the executable
+# appears in a command line, never on the bare product name.
+if pgrep -f "kijito_inbox_monitor\.py|bin/kijito-inbox-monitor" >/dev/null 2>&1 \
+   || pgrep -f "kijito-inbox-monitor .*--persona" >/dev/null 2>&1; then
+  if [ -z "$_safe" ]; then
+    _prod="inbox-monitor producer: a producer process is running (persona unknown here — no .kijito_persona marker, so this hook cannot tell whether it covers YOUR inbox)."
+  elif [ -e "$_events" ]; then
+    _prod="inbox-monitor producer: UP for '$_persona' ($_sup; events → $_events)."
+  else
+    # The case that actually bit river on 2026-07-31: assay's producer was up, river's was not, and
+    # a host-global check would have called that UP and sent the agent off to tail a missing file.
+    _prod="inbox-monitor producer: a producer is running but NOT for '$_persona' — $_events does not exist, so YOUR mail is not being collected. Start one: $(
+      [ "$_sup" = launchd ] \
+        && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
+        || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "$_persona" )"
+  fi
 else
-  _prod="inbox-monitor producer: DOWN — no events will arrive until restarted: launchctl kickstart -k gui/\$(id -u)/com.kijito.inbox-monitor"
+  _prod="inbox-monitor producer: DOWN — no events will arrive until restarted: $(
+    [ "$_sup" = launchd ] \
+      && printf 'launchctl kickstart -k gui/$(id -u)/com.kijito.inbox-monitor' \
+      || printf 'systemctl --user enable --now kijito-inbox-monitor@%s' "${_persona:-<persona>}" )"
 fi
 
 # Catch-up reminder.
@@ -68,8 +118,20 @@ EOF
 # sibling vs a leaked orphan; the stream is shared per-persona), so it defers the keep-vs-arm
 # decision to the agent's own task list and NEVER recommends a pattern-kill (a broad pkill on the
 # stream can kill a live sibling's or your own consumer — proven during argus's testing).
+#
+# ⚠️ The duplicate-detection pattern has to follow the LAYOUT too. Hardcoding `events\.<p>\.ndjson`
+# made this branch dead on every Linux seat: it could never match, so the hook always took the
+# "nothing is armed" path and told a returning session to arm again — re-introducing the very
+# duplicate-monitor bug this block was written to fix, on exactly the hosts where nobody was
+# looking for it. Match on the resolved events file's basename instead.
 _armed=""
-[ -n "$_safe" ] && _armed=$(pgrep -f "tail -n 0 -F.*events\.${_safe}\.ndjson" 2>/dev/null | tr '\n' ' ')
+if [ -n "$_safe" ]; then
+  _evbase=$(basename "$_events")
+  # basename is a literal filename; escape the regex metacharacter it can contain (.) so a dot
+  # cannot match an arbitrary character and over-report.
+  _evpat=$(printf '%s' "$_evbase" | sed 's/\./\\./g')
+  _armed=$(pgrep -f "tail -n 0 -F.*${_evpat}" 2>/dev/null | tr '\n' ' ')
+fi
 
 if [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
@@ -83,7 +145,7 @@ task list:
     all but one.
   • You have NO inbox Monitor (brand-new session; the tail is a sibling's or a leaked orphan that will
     NOT wake YOU) → arm exactly one for yourself:
-      Monitor(command="tail -n 0 -F \$HOME/.cache/kijito-inbox-monitor/events.$_safe.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)
+      Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
 Dedupe with TaskStop (agent-scoped), NOT \`pkill -f …events…\` (that can kill a sibling's or your own live consumer). $_prod
 EOF
 elif [ -n "$_safe" ]; then
@@ -94,7 +156,7 @@ background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes yo
 woken). Arm the wake-capable consumer with the Monitor TOOL (persistent) — it streams each event
 as a live notification. Your persona for this project is "$_persona":
 
-  Monitor(command="tail -n 0 -F \$HOME/.cache/kijito-inbox-monitor/events.$_safe.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)
+  Monitor(command="tail -n 0 -F $_events | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
 
 First confirm nothing is already monitoring that stream this session (avoid double-arming). $_prod
 EOF
@@ -106,7 +168,7 @@ background \`tail\` is CAPTURE-ONLY (it writes to a file and never re-invokes yo
 woken). Arm the wake-capable consumer for YOUR persona with the Monitor TOOL (persistent) — it
 streams each event as a live notification. Substitute your persona name for <persona>:
 
-  Monitor(command="tail -n 0 -F \$HOME/.cache/kijito-inbox-monitor/events.<persona>.ndjson | grep --line-buffered -E '\"event\": \"(new|alert|recovered)\"'", persistent=true)
+  Monitor(command="tail -n 0 -F $_events_tmpl | grep --line-buffered -E '\"event\": ?\"(new|alert|recovered)\"'", persistent=true)
 
 (No .kijito_persona marker found in this project — add a one-line \`.kijito_persona\` file with your
 persona name in the project root so this resolves automatically next session.) $_prod
