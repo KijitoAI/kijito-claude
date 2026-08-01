@@ -1,0 +1,21 @@
+[Unit]
+# BACKUP heartbeat for an armed autonomous Claude Code pane.
+#
+# ⚠️ INSTANTIATE WITH THE PANE NUMBER *WITHOUT* ITS LEADING '%':  pane %1  ->  kijito-heartbeat@1
+# systemd treats '%' as its own specifier prefix, so passing "%1" directly is mangled to "\x251" and
+# the watchdog then polls a pane that cannot exist. ExecStart rebuilds the id with '%%' (a literal
+# percent) followed by '%i' (the instance name).
+#
+# ⚠️ THIS IS THE BACKUP, NOT THE PRIMARY. The primary resume path is the SessionStart hook running
+# session-autosend.sh after a /clear; this only covers a pane going quiet WITHOUT one.
+# Armed-only and fail-closed: an unarmed pane is never poked.
+Description=Kijito backup heartbeat (pane %%%i)
+After=network-online.target
+
+[Service]
+ExecStart=%h/.claude/heartbeat-watchdog.sh %%%i
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
