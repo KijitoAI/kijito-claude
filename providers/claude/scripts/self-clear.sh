@@ -61,7 +61,44 @@ cf="$(lc_cycle_file)"; cyc=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "
 # C5 — consume the token (one clear per QA pass) and fire as the LAST action
 rm -f "$tok"
 delay="${KIJITO_SELFCLEAR_DELAY:-3.0}"
-lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay"
+
+# C6 — RECORD THE CONTEXT LEVEL WE RECYCLED AT. OBSERVABILITY, NOT A GATE.
+# ⛔ THE RULE IS NUMERIC AND WE WERE RECORDING NO INSTANCE OF THE NUMBER. `lifecycle.log` could
+# say THAT a seat recycled and WHEN, but not whether it went at 20% or 78% — so "does the fleet
+# actually recycle near the target?" was unanswerable, including retrospectively. You could not
+# spot a seat looping at 15%, nor one running to 80% and doing its worst work in the tail.
+# (Found by ladybug 2026-08-01 while auditing the myctx residual; this also gives myctx's
+# non-zero exit its first real consumer — until now its only "consumer" was a sentence of prose
+# telling an agent to run it.)
+#
+# ⛔ AND IT IS DELIBERATELY NOT A GATE, which is the more important half. The obvious version —
+# "refuse to self-clear when context is UNMEASURABLE" — makes jq, $CLAUDE_CODE_SESSION_ID and a
+# readable transcript into three new fleet-wide halt conditions for the autonomous loop. That is
+# a STRICTLY LARGER outage than the risk it removes. ★ The blast radius a new gate on this path
+# may have is "can stop ONE cycle"; that one is "can stop EVERY cycle on EVERY seat". ladybug
+# proposed it against their own instinct for exactly this reason, hours after nearly shipping
+# `lc_is_child` — a real defect with an invented fix that would have refused forever.
+#
+# ✅ THE CAVEAT THEY FLAGGED IS RESOLVED BY MEASUREMENT, NOT BY ARGUMENT: myctx inside a SUBAGENT
+# reports the PARENT's context (a real number about the wrong subject), so this would be worse
+# than useless if this script ran in a different session context than the pane's agent. Verified
+# 2026-08-01 on the VM: the shell this script runs in resolves the same CLAUDE_CODE_SESSION_ID as
+# the pane's agent, and myctx there returned 32.2% / ~677557 free against the agent's own live
+# counter of 677261 remaining — agreement to ~300 tokens, which is just the tokens spent between
+# the two reads. ⚠️ A WRONG number in an audit log is worse than an absent one, so if this ever
+# moves to a different execution context, RE-MEASURE that agreement before trusting the field.
+ctx="UNMEASURABLE"
+# KIJITO_MYCTX exists so the SUCCESS branch is testable. Without it a test can only ever exercise
+# the failure path (a fixture session has no transcript), and a branch that is only ever tested in
+# the direction it fails is not tested — the exact defect that let lc_pane_alive return TRUE for
+# every input for months.
+_myctx="${KIJITO_MYCTX:-$HOME/.claude/myctx.sh}"
+if [ -x "$_myctx" ]; then
+  _m=$("$_myctx" 2>/dev/null) && case "$_m" in
+    *%*) ctx=$(printf '%s' "$_m" | sed -n 's/.*= *\([0-9.]*%\).*/\1/p'); [ -n "$ctx" ] || ctx="UNPARSED" ;;
+  esac
+fi
+lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay ctx=$ctx"
 ( sleep "$delay"
   lc_stopped               && { lc_log SELFCLEAR_ABORT "stop during delay"; exit 0; }
   lc_pane_alive "$TMUX_PANE" || { lc_log SELFCLEAR_ABORT "pane gone during delay"; exit 0; }

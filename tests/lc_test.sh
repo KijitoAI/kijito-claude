@@ -139,6 +139,30 @@ KIJITO_AUTOCATCHUP_DELAY=0.3 KIJITO_AUTOCATCHUP_PROMPT='SHOULD_NOT_SEND' bash "$
 [ -s "$LCT/as.out" ] && no "autosend fired despite STOP" || ok "STOP blocked autosend"
 rm -f "$LCT/STOP"
 
+echo "== SELFCLEAR_FIRE records the context level — and NEVER blocks on it =="
+# ⛔ OBSERVABILITY, NOT A GATE. The ~60% recycle rule is numeric and nothing recorded the number,
+# so "does the fleet recycle near the target?" was unanswerable even in hindsight. But an
+# unmeasurable context must NEVER stop a clear: myctx depends on jq, $CLAUDE_CODE_SESSION_ID and a
+# readable transcript, and refusing on it would turn all three into fleet-wide halt conditions —
+# a strictly larger outage than the risk removed. So BOTH directions are asserted here: the number
+# is recorded when available, and its ABSENCE still fires.
+_mk_ctx_stub() { printf '#!/bin/sh\necho "context: 412345 tok = %s of 1000k   (free: 58.8%%)"\n' "$1" > "$LCT/myctx-stub.sh"; chmod +x "$LCT/myctx-stub.sh"; }
+: > "$LCT/lifecycle.log"
+_mk_ctx_stub "41.2%"
+KIJITO_MYCTX="$LCT/myctx-stub.sh" KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
+KIJITO_MYCTX="$LCT/myctx-stub.sh" KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_DELAY=0.05 \
+  TMUX="$TM" TMUX_PANE="$P" bash "$SC" >/dev/null 2>&1; chk "fires with a measurable context" 0 $?
+grep -q 'SELFCLEAR_FIRE .*ctx=41.2%' "$LCT/lifecycle.log" && ok "logs the measured context level" \
+  || { no "context level not in the audit log"; grep SELFCLEAR_FIRE "$LCT/lifecycle.log" | tail -1; }
+
+: > "$LCT/lifecycle.log"
+printf '#!/bin/sh\nexit 1\n' > "$LCT/myctx-broken.sh"; chmod +x "$LCT/myctx-broken.sh"
+KIJITO_AUTOCATCHUP=1 bash "$QP" >/dev/null 2>&1
+KIJITO_MYCTX="$LCT/myctx-broken.sh" KIJITO_AUTOCATCHUP=1 KIJITO_SELFCLEAR_DELAY=0.05 \
+  TMUX="$TM" TMUX_PANE="$P" bash "$SC" >/dev/null 2>&1; chk "an UNMEASURABLE context does NOT block the clear" 0 $?
+grep -q 'SELFCLEAR_FIRE .*ctx=UNMEASURABLE' "$LCT/lifecycle.log" && ok "records the absence honestly" \
+  || no "did not record ctx=UNMEASURABLE"
+
 echo "== arm-session.sh 'off' must not report a disarm it cannot deliver =="
 # ⛔ REGRESSION GUARD FOR A CONTROL THAT LIED. Arming is an OR of two inputs — the pane marker and the
 # seat-wide KIJITO_AUTOCATCHUP=1 — and `off` can only remove the marker. On a seat where the env var
