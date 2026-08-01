@@ -139,6 +139,34 @@ KIJITO_AUTOCATCHUP_DELAY=0.3 KIJITO_AUTOCATCHUP_PROMPT='SHOULD_NOT_SEND' bash "$
 [ -s "$LCT/as.out" ] && no "autosend fired despite STOP" || ok "STOP blocked autosend"
 rm -f "$LCT/STOP"
 
+echo "== arm-session.sh 'off' must not report a disarm it cannot deliver =="
+# ⛔ REGRESSION GUARD FOR A CONTROL THAT LIED. Arming is an OR of two inputs — the pane marker and the
+# seat-wide KIJITO_AUTOCATCHUP=1 — and `off` can only remove the marker. On a seat where the env var
+# is set (Jason ordered it on the Ubuntu VM 2026-08-01), `off` deleted a file nothing consults and
+# printed "AUTONOMY OFF: self-clear refused", while self-clear remained permitted. A human handing a
+# pane back would have believed the pane was theirs.
+# ★ Both directions, because that is the whole lesson: `off` must SUCCEED when the marker is the only
+# input, and REFUSE when it is not. A test of only the refusal would pass against a script that
+# always refuses — which is an outage, not a fix.
+ARM="$SDIR/arm-session.sh"
+APANE="%77777"                                 # synthetic: arming never consults tmux, only the file
+( env -u KIJITO_AUTOCATCHUP KIJITO_LC_DIR="$LCT" TMUX_PANE="$APANE" bash "$ARM" on >/dev/null 2>&1 )
+out=$( env -u KIJITO_AUTOCATCHUP KIJITO_LC_DIR="$LCT" TMUX_PANE="$APANE" bash "$ARM" off 2>&1 ); r=$?
+chk "off SUCCEEDS when the marker is the only input" 0 $r
+case "$out" in *"AUTONOMY OFF"*) ok "off says AUTONOMY OFF when it is true" ;; *) no "off did not confirm the real disarm" ;; esac
+[ -e "$LCT/arm.$APANE" ] && no "marker survived off" || ok "marker removed by off"
+
+( env -u KIJITO_AUTOCATCHUP KIJITO_LC_DIR="$LCT" TMUX_PANE="$APANE" bash "$ARM" on >/dev/null 2>&1 )
+out=$( KIJITO_AUTOCATCHUP=1 KIJITO_LC_DIR="$LCT" TMUX_PANE="$APANE" bash "$ARM" off 2>&1 ); r=$?
+chk "off REFUSES (3) while KIJITO_AUTOCATCHUP=1 still arms the seat" 3 $r
+case "$out" in *STOP*) ok "the refusal names the kill switch, the one brake that works" ;; *) no "refusal did not name STOP" ;; esac
+[ -e "$LCT/arm.$APANE" ] && no "marker survived the refusing off" || ok "off still removes the marker before refusing"
+# and the refusal must be TRUE — the pane really is still armed after it
+out=$( KIJITO_AUTOCATCHUP=1 KIJITO_LC_DIR="$LCT" TMUX_PANE="$APANE" bash "$ARM" status 2>&1 )
+case "$out" in *"armed (autonomous)"*) ok "still armed after off — the refusal was accurate" ;; *) no "status disagrees with the refusal" ;; esac
+case "$out" in *marker=*env=*) ok "status prints BOTH arming inputs" ;; *) no "status hides one of the two inputs" ;; esac
+rm -f "$LCT/arm.$APANE"
+
 echo "== audit log =="
 [ -s "$LCT/lifecycle.log" ] && ok "log has entries" || no "no audit log"
 

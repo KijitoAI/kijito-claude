@@ -56,9 +56,21 @@ lc_pane_usable() {
   case "$c" in ""|zsh|bash|sh|-zsh|-bash|-sh|fish|tcsh|dash) return 1 ;; *) return 0 ;; esac
 }
 
-# Per-spawn arming (ROBUST — no env-propagation dependency): claude-armed.sh drops a marker keyed to
-# the pane; the hook (which reliably has TMUX_PANE) reads it. Also honors KIJITO_AUTOCATCHUP=1.
-lc_is_armed() { [ -f "$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}" ] || [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
+# Arming has TWO INDEPENDENT INPUTS, and they are ORed. Keep them as separate named predicates:
+# anything that REPORTS on arming, or claims to change it, must be able to say WHICH one is in force.
+#   (1) per-pane marker — claude-armed.sh / arm-session.sh drop a file keyed to the pane; the hook
+#       (which reliably has TMUX_PANE) reads it. Session-scoped, removable by the agent.
+#   (2) KIJITO_AUTOCATCHUP=1 — a SEAT-WIDE env var, typically set in ~/.claude/settings.json, which
+#       reaches every session on the host. A running process CANNOT unset it for itself, so it is not
+#       revocable from inside a session at all.
+# ⛔ WHY THE SPLIT EXISTS: while (2) is in force, deleting the marker changes NOTHING. `arm-session.sh
+# off` did exactly that and printed "AUTONOMY OFF" — a control that reported success without acting,
+# which is worse than one that errors (measured by ladybug on the Ubuntu VM 2026-08-01: with
+# KIJITO_AUTOCATCHUP=1 live, `lc_is_armed %99999` — a pane that does not exist — returns ARMED).
+# The only brake that works against (2) is the kill switch: touch "$KIJITO_LC_DIR/STOP".
+lc_marker_armed() { [ -f "$KIJITO_LC_DIR/arm.${1:-${TMUX_PANE:-x}}" ]; }
+lc_env_armed()    { [ "${KIJITO_AUTOCATCHUP:-0}" = "1" ]; }
+lc_is_armed()     { lc_marker_armed "${1:-}" || lc_env_armed; }
 
 # qa-token is SESSION-keyed (correct: each post-/clear session must earn its OWN fresh QA pass).
 lc_qa_token()   { echo "$KIJITO_LC_DIR/qa-pass.${CLAUDE_CODE_SESSION_ID:-nosession}"; }
