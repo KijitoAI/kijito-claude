@@ -17,6 +17,22 @@ Run the phases in order. Do not declare done until Phase 4 passes twice (2-green
 
 **📥 Inbox freeze during wind-down (Jason's standing rule, 2026-07-30):** once this skill starts, **non-urgent hive messages SIT UNREAD until after the recycle** — do not read or process them mid-wind-down (a fresh post-clear session handles them better than a degraded tail, and processing mid-recycle risks half-done handoffs). Only a message marked ★URGENT interrupts. Instead, record a **DEFERRED INBOX note in the pointer** (Phase 3) so the next boot reads its mail as an early step, cold.
 
+## Phase 0 — DECLARE THE FREEZE, so senders can see it instead of remembering it
+
+**FIRST action of this skill**, before Phase 1:
+
+```
+kijito_presence(persona="<you>", status="mid kijito-qa-memory — inbox frozen")
+```
+
+⛔ **WHY THIS IS A PHASE AND NOT A COURTESY.** The freeze above is a rule that *readers* must remember — so it protects nobody from a sender who never read it. On 2026-08-01 Jason flagged that a fan-out had disrupted agents mid-wind-down; the sender then **checked the presence roster, saw no one mid-QA, and sent three more** — because presence `status` is a **stale self-report that nothing updates**, and an empty answer read as "nobody is winding down." ⇒ **Declaring it converts a rule into a roster fact a sender can look up.** (Sender-side twin, adopt it: **hold non-urgent fan-outs while anyone shows this status.**)
+
+✅ **AND CLEAR IT — an unclearable status is the very defect this fixes.** Pass `status=""` when the wind-down ends:
+- **finishing without a recycle** → clear it in the Done report step;
+- **self-clearing** → clear it as part of the final step, *before* `self-clear.sh` — the cleared session cannot clear anything afterwards;
+- **belt-and-braces** → `kijito-start` clears a stale freeze status at boot, because a boot is proof the wind-down is over.
+⚠️ Presence is **in-memory and account-scoped** (empty after a server restart, and a persona drops off the roster after ~10 min of inactivity) — so treat a missing status as *unknown*, never as *not frozen*.
+
 ## Phase 1 — CREATE (exhaustive, do this FIRST)
 
 Enumerate EVERY candidate insight from this session — don't filter yet:
@@ -85,6 +101,8 @@ Compare its report to ground truth:
 State plainly: N memories created, N corrected, N faded; the current-state pointer ID; and the cold-boot verdict ("a fresh agent reconstructed the active task + next steps + DONE-WHEN, 2 consecutive clean boots"). If you cannot say that, you are not done.
 
 **Then record the pass:** run `~/.claude/kijito-qa-pass.sh`. This writes the token `self-clear.sh` requires — without a passing cold-boot verify you cannot self-clear, by design. The token is consumed by one `/clear`, so each recycle needs a fresh kijito-qa-memory pass.
+
+**Then lift the freeze you declared in Phase 0:** `kijito_presence(persona="<you>", status="")` — last thing before `self-clear.sh` if you are recycling, or right here if you are not. **A freeze nobody lifts is indistinguishable from a freeze nobody declared**, and the next sender reads a stale status as current.
 
 ## Notes
 
