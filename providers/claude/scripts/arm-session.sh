@@ -12,7 +12,13 @@ action="${1:-on}"
 if [ -z "${TMUX_PANE:-}" ]; then echo "not in tmux — autonomy needs a tmux pane; nothing armed."; exit 1; fi
 marker="$KIJITO_LC_DIR/arm.$TMUX_PANE"
 case "$action" in
-  on)     touch "$marker"; lc_log ARM "on pane=$TMUX_PANE"
+  # The marker carries PROVENANCE (session name + #{session_created}) and is validated against the
+  # live tmux server on every read — see lifecycle-lib.sh. A zero-byte touch would arm nothing.
+  on)     if ! lc_marker_write "$TMUX_PANE"; then
+            echo "could not arm: pane $TMUX_PANE is not a live tmux pane (or tmux did not answer). Nothing armed." >&2
+            lc_log ARM "on FAILED pane=$TMUX_PANE — no live pane fingerprint"; exit 1
+          fi
+          lc_log ARM "on pane=$TMUX_PANE"
           echo "AUTONOMY ON (pane $TMUX_PANE): self-clear permitted; after any /clear this pane auto-catches-up + resumes. Turn off: ~/.claude/arm-session.sh off" ;;
   # ⛔ `off` MUST NOT REPORT SUCCESS IT CANNOT DELIVER. Removing the marker disarms NOTHING while the
   # seat-wide KIJITO_AUTOCATCHUP=1 is in force, and a process cannot unset an env var for itself.
@@ -37,6 +43,17 @@ EOF
   status) m=no; e=no
           lc_marker_armed "$TMUX_PANE" && m=yes
           lc_env_armed && e=yes
+          # ⚠️ "no" has three different causes and only one of them means "you never armed this".
+          # Saying which is the difference between a status and a riddle.
+          if [ "$m" = no ]; then
+            if lc_marker_legacy "$TMUX_PANE"; then
+              m="no (LEGACY marker: written before markers carried provenance, so it cannot prove it
+              belongs to THIS session — pane ids recycle. Re-arm with 'arm-session.sh on'.)"
+            elif [ -f "$marker" ]; then
+              m="no (marker exists but its session fingerprint does NOT match this pane's live tmux
+              session — it was left by a DIFFERENT session that had this pane id. Re-arm to claim it.)"
+            fi
+          fi
           echo "pane=$TMUX_PANE marker=$m (arm.$TMUX_PANE) env=$e (KIJITO_AUTOCATCHUP=${KIJITO_AUTOCATCHUP:-unset})"
           if lc_is_armed "$TMUX_PANE"; then
             echo "armed (autonomous) — armed by: $( [ "$m" = yes ] && printf 'marker '; [ "$e" = yes ] && printf 'env')"

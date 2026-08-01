@@ -12,7 +12,13 @@ _kjt_lib="${KIJITO_LC_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecyc
 . "$_kjt_lib" 2>/dev/null
 marker="${KIJITO_LC_DIR:-$HOME/.claude/.lifecycle}/arm.${TMUX_PANE:-nopane}"
 mkdir -p "$(dirname "$marker")" 2>/dev/null
-touch "$marker" 2>/dev/null
+# ⛔ NOT `touch`. A zero-byte marker cannot prove it belongs to THIS session, and tmux pane ids
+# restart at %0 and recycle — so a bare touch is how a future session inherits an arming it never
+# performed, on the gate that authorises an irreversible /clear. lc_marker_write stamps the live
+# session fingerprint into the file and lc_marker_armed re-validates it on every read.
+if command -v lc_marker_write >/dev/null 2>&1 && [ -n "${TMUX_PANE:-}" ]; then
+  lc_marker_write "$TMUX_PANE" || echo "claude-armed: could not stamp an arm marker for $TMUX_PANE (not a live tmux pane?) — relying on KIJITO_AUTOCATCHUP" >&2
+fi
 trap 'rm -f "$marker"' EXIT INT TERM
 
 # Hosted Kijito MCP bearer token for .mcp.json's ${KIJITO_API_TOKEN} — read from a file so it is
