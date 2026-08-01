@@ -60,6 +60,15 @@ lc_log SELFCLEAR_FIRE "cycle=$cyc delay=$delay"
   lc_stopped               && { lc_log SELFCLEAR_ABORT "stop during delay"; exit 0; }
   lc_pane_alive "$TMUX_PANE" || { lc_log SELFCLEAR_ABORT "pane gone during delay"; exit 0; }
   tmux send-keys -t "$TMUX_PANE" -l -- "/clear" 2>/dev/null
+  # Same paste-buffer race that broke session-autosend (Jason, 2026-08-01: an injected prompt "was
+  # entered into the input but remained unsent") — an Enter arriving inside the TUI's ingest burst is
+  # taken as a newline rather than as submit. "/clear" is short and has fired ~88 times successfully,
+  # so this gap is hardening, not a repair; but the cost of it failing here is the same dead loop.
+  # ⛔ NO RETRY LOOP HERE, DELIBERATELY — THE OPPOSITE CHOICE FROM session-autosend. There a second
+  # Enter is free. Here a second "/clear" would land in the session the first one already cleared,
+  # wiping the auto-resume prompt the SessionStart hook had just injected — stopping the loop by way
+  # of the very mechanism meant to protect it. Fire once.
+  sleep "${KIJITO_SEND_SETTLE:-1.2}"
   tmux send-keys -t "$TMUX_PANE" Enter 2>/dev/null
   lc_log SELFCLEAR_DONE "cycle=$cyc"
 ) >/dev/null 2>&1 &

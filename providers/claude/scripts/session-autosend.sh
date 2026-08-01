@@ -35,6 +35,43 @@ lc_pane_alive "$pane"  || { lc_log AUTOSEND_ABORT "pane gone"; exit 0; }
 # NOTE: do NOT gate on pane_current_command — it's unreliable (reports "bash" for a wrapped
 # claude, the version for an exec'd one). send-keys reaches the pane's TTY (claude) regardless.
 tmux send-keys -t "$pane" -l -- "$prompt" 2>/dev/null
-tmux send-keys -t "$pane" Enter 2>/dev/null
-lc_log AUTOSEND_FIRE "delay=$delay"
+
+# ⛔ THE ENTER NEEDS A GAP AFTER THE TEXT, AND WITHOUT ONE THE WHOLE AUTONOMOUS LOOP SILENTLY DIES.
+# Observed 2026-08-01 (Jason, live): "the injected start prompt was just entered into the input but
+# remained unsent." The two send-keys calls used to be back-to-back. The TUI is an Ink app that
+# buffers a fast burst of characters as a PASTE, and an Enter arriving inside that burst is taken as
+# a NEWLINE IN THE BUFFER rather than as submit. The prompt then sits in the input box, complete and
+# unsent, forever.
+#
+# ★ WHY THIS IS THE WORST POSSIBLE PLACE FOR A SILENT FAILURE: this send is the ONLY thing that
+# restarts work after a /clear. A self-clear with a broken re-send does not degrade the loop, it
+# ENDS it — and it ends it in the state that looks most like success, because /clear ran, the pane
+# is alive, and the prompt is visibly right there on screen.
+settle="${KIJITO_SEND_SETTLE:-1.2}"          # let the TUI finish ingesting the paste
+sleep "$settle"
+
+# ⚠️ AND SENDING ENTER IS NOT THE SAME AS HAVING SENT THE PROMPT, so verify rather than hope.
+# After a successful submit the input box is empty and the text has moved up into the transcript, so
+# the prompt's TAIL disappears from the BOTTOM few lines. If it is still down there, the Enter did
+# not take — retry a bounded number of times rather than leaving the loop dead.
+#
+# The probe is the prompt's LAST 40 characters: the tail is what remains visible in a wrapped input
+# box, and matching a fixed string with -F avoids any regex metacharacter in the prompt.
+probe=$(printf '%s' "$prompt" | tail -c 40)
+sent=0
+for _try in 1 2 3; do
+  tmux send-keys -t "$pane" Enter 2>/dev/null
+  sleep 1.5
+  if ! tmux capture-pane -p -t "$pane" 2>/dev/null | tail -6 | grep -qF -- "$probe"; then
+    sent=1; break
+  fi
+  lc_log AUTOSEND_RETRY "enter did not submit (attempt $_try)"
+done
+
+if [ "$sent" = 1 ]; then
+  lc_log AUTOSEND_FIRE "delay=$delay settle=$settle"
+else
+  # Do not fail silently: a loop that stopped because of THIS is exactly what nobody notices.
+  lc_log AUTOSEND_FAILED "prompt still in the input box after 3 Enters — the loop is NOT running"
+fi
 exit 0
