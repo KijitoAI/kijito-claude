@@ -23,7 +23,30 @@ lc_stopped() { [ -f "$KIJITO_LC_STOP" ]; }              # M1 — kill switch: `t
 # see self-clear.sh "C2". Do not cite it as protection.)
 lc_is_child() { [ -n "${CLAUDE_AGENT_TYPE:-}" ] || [ -n "${CLAUDE_CODE_AGENT:-}" ]; }
 
-lc_pane_alive() { command -v tmux >/dev/null 2>&1 && tmux display-message -p -t "$1" '#{session_name}' >/dev/null 2>&1; }
+# ⛔ THIS GATE RETURNED TRUE FOR EVERY INPUT, INCLUDING GARBAGE — IT HAD NEVER ONCE REFUSED.
+# Found by argus 2026-08-01, measured on Linux tmux 3.4 AND macOS tmux 3.6a. The old body asked
+# `tmux display-message -p -t "$1" '#{session_name}'` and read its EXIT CODE — but display-message
+# EXITS 0 FOR A NONEXISTENT PANE, it simply prints empty fields:
+#     $ tmux display-message -p -t %999 'sess=#{session_name}'   ->  "sess="   rc=0
+# so `lc_pane_alive %999`, and even `lc_pane_alive nonsense`, were both TRUE.
+#
+# ★ WHY IT SURVIVED SO LONG: it was only ever exercised against a LIVE pane — the one input
+# incapable of exposing it. A control verified solely in the direction it was designed to move is
+# not verified at all. (Reproduced before fixing: %999 and "nonsense" TRUE on the old body, both
+# FALSE on this one, real pane still TRUE.)
+#
+# ⚠️ BOUNDED HONESTLY, per argus: `send-keys` itself refuses on a dead pane, and enumerating every
+# pane on the host confirmed a dead-pane /clear lands in NO pane — so this could not misfire into a
+# sibling's session on a shared seat. The gate was decorative, not dangerous.
+#
+# ENUMERATE, DON'T ASK. `list-panes -a` is the authoritative set; `grep -Fqx` matches a whole line
+# literally, so `%1` cannot match `%11` and a metacharacter in the argument cannot act as a pattern.
+# Portable across BSD and GNU userland.
+lc_pane_alive() {
+  command -v tmux >/dev/null 2>&1 || return 1
+  [ -n "${1:-}" ] || return 1
+  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fqx -- "$1"
+}
 
 # M4 (FIXED) — a running claude pane reports pane_current_command as its VERSION (e.g. "2.1.190"),
 # NOT "claude"/"node" (verified 2026-06-24). So check "not a bare shell" instead of whitelisting claude.

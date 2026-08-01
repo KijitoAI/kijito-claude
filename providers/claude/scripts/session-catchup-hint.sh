@@ -137,7 +137,7 @@ if [ -n "$_safe" ] && [ -n "$_armed" ]; then
 cat <<EOF
 
 [INBOX WAKE — a consumer already tails your stream; do NOT blindly add another] One or more processes
-are already tailing events.$_safe.ndjson (pid(s): $_armed). This is EXPECTED after a /clear or /compact
+are already tailing $_events (pid(s): $_armed). This is EXPECTED after a /clear or /compact
 (your own persistent Monitor survives the reset). The hook can't tell whose it is, so decide from YOUR
 task list:
   • You ALREADY have a live persistent inbox Monitor in your task list → keep it, do NOT arm another (a

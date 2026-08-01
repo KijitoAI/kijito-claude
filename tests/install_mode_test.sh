@@ -86,6 +86,39 @@ check_installer() {
     red "$label: merge no longer additive — the mode fix must not change what the file contains"; bad=1
   fi
 
+  # ---- scenario C: an existing 0644 must be TIGHTENED, and the tightening must be VISIBLE ----
+  # assay's second-operator review endorsed tightening (a settings.json holding a bearer token has
+  # no legitimate other-reader) but flagged that doing it silently is wrong: the output read
+  # "mode 0600" identically whether it had always been 0600 or had just been changed underneath the
+  # operator. A policy decision the user cannot see is not a policy, it is a surprise.
+  mkdir -p "$tmp/c/.claude"
+  printf '%s\n' '{"env":{"KIJITO_API_TOKEN":"kjt_TESTVALUE_not_a_real_token"}}' > "$tmp/c/.claude/settings.json"
+  chmod 0644 "$tmp/c/.claude/settings.json"
+  ( umask 002; HOME="$tmp/c" bash "$installer" > "$tmp/c/out.log" 2>&1 )
+  m="$(mode_of "$tmp/c/.claude/settings.json")"
+  if [ "$m" = "600" ]; then grn "$label: pre-existing 0644 is tightened to 0600"
+  else red "$label: 0644 settings.json left at $m — the token stays world-readable"; bad=1; fi
+  if grep -q "tightened" "$tmp/c/out.log"; then grn "$label: the tightening is announced, not silent"
+  else red "$label: mode changed 0644->0600 with no message — invisible policy change"; bad=1; fi
+
+  # ---- scenario D: a SYMLINKED settings.json must be followed, not replaced ----
+  # Replacing the symlink leaves the live config correct — which is why it looks fine — while
+  # silently de-linking a dotfiles-managed setup AND stranding a copy of the token at the old path
+  # and old mode. Same defect as the headline one, just relocated.
+  mkdir -p "$tmp/d/.claude" "$tmp/d/dotfiles"
+  printf '%s\n' '{"env":{"KIJITO_API_TOKEN":"kjt_TESTVALUE_not_a_real_token"}}' > "$tmp/d/dotfiles/settings.json"
+  chmod 0600 "$tmp/d/dotfiles/settings.json"
+  ln -s "$tmp/d/dotfiles/settings.json" "$tmp/d/.claude/settings.json"
+  ( umask 002; HOME="$tmp/d" bash "$installer" >/dev/null 2>&1 )
+  if [ -L "$tmp/d/.claude/settings.json" ]; then grn "$label: symlinked settings.json stays a symlink"
+  else red "$label: symlink was REPLACED by a regular file — dotfiles indirection broken, token stranded at the old path"; bad=1; fi
+  if jq -e '.statusLine.type == "command"' "$tmp/d/dotfiles/settings.json" >/dev/null 2>&1; then
+    grn "$label: the merge was written THROUGH the symlink to its target"
+  else red "$label: symlink target was not updated — the install did not take"; bad=1; fi
+  m="$(mode_of "$tmp/d/dotfiles/settings.json")"
+  if [ "$m" = "600" ]; then grn "$label: symlink target is 0600"
+  else red "$label: symlink target is $m, expected 600"; bad=1; fi
+
   # ---- scenario B: NO pre-existing settings.json ----
   # A fresh install has no prior mode to preserve, so "preserve the mode" is not a sufficient fix:
   # the file must be created locked down. Without this case a fix that only copies the old mode
@@ -95,6 +128,13 @@ check_installer() {
   m="$(mode_of "$tmp/b/.claude/settings.json")"
   if [ "$m" = "600" ]; then grn "$label: freshly-created settings.json is 0600 (umask 002)"
   else red "$label: fresh settings.json is $m, expected 600"; bad=1; fi
+
+  # A fresh install used to leave a settings.json.bak.<ts> containing `{}` — noise that implies a
+  # prior config which never existed, and makes the backup list harder to read exactly when it
+  # matters. Assert the absence.
+  if ls "$tmp/b/.claude"/settings.json.bak.* >/dev/null 2>&1; then
+    red "$label: fresh install wrote a backup of a file that did not exist"; bad=1
+  else grn "$label: fresh install writes no empty backup"; fi
 
   return $bad
 }

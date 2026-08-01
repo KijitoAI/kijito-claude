@@ -71,7 +71,15 @@ done
 if [ "$sent" = 1 ]; then
   lc_log AUTOSEND_FIRE "delay=$delay settle=$settle"
 else
-  # Do not fail silently: a loop that stopped because of THIS is exactly what nobody notices.
-  lc_log AUTOSEND_FAILED "prompt still in the input box after 3 Enters — the loop is NOT running"
+  # ⚠️ UNCONFIRMED, NOT FAILED — and the distinction is the same one the gate runner enforces
+  # between BLOCKED and FAIL. The probe reads the BOTTOM of the pane, so it can only observe that
+  # the prompt's tail is still down there. That is strong evidence in the real TUI (a submitted
+  # message scrolls up and the input box empties) but it is not proof: any host whose display keeps
+  # the text visible at the bottom — a plain shell echoing input, a narrow pane, an unusual theme —
+  # produces a false negative on a delivery that actually worked.
+  # ⇒ Say what was observed, never more. Claiming "the loop is NOT running" when the loop may be
+  # perfectly fine is exactly the wrong-diagnosis-costs-more failure argus and I have both been
+  # chasing tonight; a confident wrong log entry sends the next reader hunting the wrong thing.
+  lc_log AUTOSEND_UNCONFIRMED "sent 3 Enters; prompt tail still visible at the bottom of the pane — delivery NOT confirmed (it may still have worked; check the pane before acting)"
 fi
 exit 0
