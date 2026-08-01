@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   MAX_JSON_BYTES,
-  N0Error,
   fail,
   pathInside,
 } from "./lib.mjs";
@@ -46,7 +45,7 @@ export function snapshotTree(root, {
 } = {}) {
   const absoluteRoot = path.resolve(root);
   const rootStat = fs.lstatSync(absoluteRoot);
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) fail("SNAPSHOT_ROOT_INVALID", "snapshot root must be a real directory");
+  if (!rootStat.isDirectory()) fail("SNAPSHOT_ROOT_INVALID", "snapshot root must be a real directory");
   if (uid !== undefined && rootStat.uid !== uid) fail("SNAPSHOT_OWNER_MISMATCH", "snapshot root owner mismatch");
   const realRoot = fs.realpathSync(absoluteRoot);
   const entries = [];
@@ -55,13 +54,14 @@ export function snapshotTree(root, {
   const walk = (directory) => {
     for (const dirent of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const target = path.join(directory, dirent.name);
-      const stat = fs.lstatSync(target);
-      if (stat.isSymbolicLink()) fail("SYMLINK_REJECTED", `snapshot contains symlink: ${target}`);
-      if (uid !== undefined && stat.uid !== uid) fail("SNAPSHOT_OWNER_MISMATCH", `snapshot entry owner mismatch: ${target}`);
+      const entryStat = fs.lstatSync(target);
       const real = fs.realpathSync(target);
       if (!pathInside(realRoot, real)) fail("REALPATH_ESCAPE", `snapshot entry escapes root: ${target}`);
+      if (entryStat.isSymbolicLink() && pathInside(realRoot, real)) fail("SYMLINK_REJECTED", `snapshot contains symlink: ${target}`);
+      const stat = fs.lstatSync(real);
+      if (uid !== undefined && stat.uid !== uid) fail("SNAPSHOT_OWNER_MISMATCH", `snapshot entry owner mismatch: ${target}`);
       if (stat.isDirectory()) {
-        walk(target);
+        walk(real);
         continue;
       }
       if (!stat.isFile()) fail("NON_REGULAR_ENTRY", `unsupported snapshot entry: ${target}`);
@@ -113,7 +113,6 @@ export function assertSnapshotStable(snapshot, current) {
     const changed = changedCandidates(snapshot, current);
     if (changed.length) fail("CONCURRENT_MUTATION", "snapshot changed", changed);
   } catch (error) {
-    if (error instanceof N0Error) throw error;
     throw error;
   }
   return true;

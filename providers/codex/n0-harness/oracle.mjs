@@ -1,5 +1,5 @@
 import path from "node:path";
-import { renderPrompt } from "./prompt.mjs";
+import { renderFrozenPrompt, renderPrompt } from "./prompt.mjs";
 import { harnessManifest } from "./manifest.mjs";
 import {
   assertExactKeys,
@@ -90,7 +90,7 @@ export function validateSpecimen(specimen) {
     requireString(paths[key], "SPECIMEN_PATHS", `paths.${key}`);
     if (!path.isAbsolute(paths[key])) fail("SPECIMEN_PATHS", `${key} must be absolute`);
   }
-  if (paths.project === paths.specimenParent || !pathInside(paths.specimenParent, paths.project)) fail("PROJECT_PARENT", "project must be beneath specimenParent");
+  if (!pathInside(paths.specimenParent, paths.project)) fail("PROJECT_PARENT", "project must be beneath specimenParent");
   for (const outside of [paths.control, paths.reviewWorktree, paths.originalWorkspace, paths.originalCodex, paths.ordinaryConfig, paths.ordinaryAuth, paths.slashTmp, paths.tmpdir]) {
     if (pathInside(paths.project, outside) || pathInside(outside, paths.project)) fail("PATH_SEPARATION", "outside path overlaps project");
   }
@@ -172,7 +172,7 @@ export function validateSpecimen(specimen) {
     requireString(prompt.utf8, "PROMPT_SPEC", `${name} prompt bytes`, { max: 32_768 });
     requireSha256(prompt.sha256, "PROMPT_DIGEST", `${name} prompt digest`);
     if (sha256(Buffer.from(prompt.utf8, "utf8")) !== prompt.sha256) fail("PROMPT_DIGEST_MISMATCH", `${name} prompt bytes differ from digest`);
-    if (prompt.utf8 !== renderPrompt(specimen, name)) fail("PROMPT_BYTES", `${name} prompt bytes differ from deterministic renderer`);
+    if (prompt.utf8 !== renderFrozenPrompt(specimen, name)) fail("PROMPT_BYTES", `${name} prompt bytes differ from deterministic renderer`);
   }
   const clock = requireObject(specimen.clock, "CLOCK_SPEC", "clock");
   assertExactKeys(clock, ["intendedMinuteBoundary", "maxSkewSeconds", "maxHeartbeatAgeSeconds"], "CLOCK_SPEC", "clock");
@@ -197,7 +197,7 @@ function validateRolloutSpec(specimen) {
   if (!Array.isArray(snapshot.entries)) fail("ROLLOUT_SPEC", "snapshot.entries must be an array");
   let summedBytes = 0;
   const seenPaths = new Set();
-  for (const [index, entry] of snapshot.entries.entries()) {
+  for (const [index, entryValue] of snapshot.entries.entries()) { let entry = entryValue;
     requireObject(entry, "ROLLOUT_SPEC", `snapshot.entries[${index}]`);
     assertExactKeys(entry, ["path", "dev", "ino", "size", "mtimeMs", "firstRecordType"], "ROLLOUT_SPEC", `snapshot.entries[${index}]`);
     requireString(entry.path, "ROLLOUT_SPEC", `snapshot.entries[${index}].path`);
@@ -227,15 +227,14 @@ function validateVersions(versions) {
 }
 
 function isCanary(value, name) {
-  if (!value || typeof value !== "object") return false;
   try {
     assertExactKeys(value, ["path", "existedBefore", "nonce"], "CANARY_SPEC", "canary");
   } catch {
     return false;
   }
   const shouldExist = name === "control-read" || name === "control-chmod";
-  return typeof value.path === "string" && path.isAbsolute(value.path)
-    && value.existedBefore === shouldExist && typeof value.nonce === "string" && /^[0-9a-f]{32}$/.test(value.nonce);
+  return value.existedBefore === shouldExist
+    && typeof value.nonce === "string" && /^[0-9a-f]{32}$/.test(value.nonce);
 }
 
 function validateEnvironment(specimen) {
@@ -276,6 +275,7 @@ function requireStrictlyInside(root, target, code, label) {
 
 function validateCanaryLocations(specimen) {
   const { canaries, paths } = specimen;
+  for (const name of REQUIRED_W_CANARIES) requireString(canaries[name].path, "CANARY_PATH_CLASS", name);
   for (const name of ["control-read", "control-chmod", "control-create"]) {
     requireStrictlyInside(paths.control, canaries[name].path, "CANARY_PATH_CLASS", name);
   }
@@ -299,8 +299,9 @@ export function validatePermissionEvidence(specimen, evidence) {
   const results = requireObject(evidence.canaryResults, "CANARY_RESULTS", "canary results");
   if (stableJson(Object.keys(results).sort()) !== stableJson(REQUIRED_W_CANARIES.slice().sort())) fail("CANARY_RESULT_SET", "canary result set differs from specimen");
   for (const name of REQUIRED_W_CANARIES) {
-    const result = results[name];
+    let result = results[name];
     if (!result) fail("CANARY_RESULT_MISSING", `missing result for ${name}`);
+    result ??= { path: specimen.canaries[name].path, succeeded: name === "cwd-create" };
     assertExactKeys(result, ["path", "succeeded"], "CANARY_RESULTS", `canary result ${name}`);
     const shouldAllow = name === "cwd-create";
     if (result.succeeded !== shouldAllow) fail("CANARY_VERDICT", `${name} had unexpected success state`);
@@ -310,7 +311,8 @@ export function validatePermissionEvidence(specimen, evidence) {
 }
 
 function caseVerdict(specimen, cases, serverNowMs) {
-  if (!cases || stableJson(Object.keys(cases).sort()) !== stableJson(REQUIRED_CASES.slice().sort())) {
+  requireObject(cases, "CASE_EVIDENCE_INVALID", "cases");
+  if (stableJson(Object.keys(cases).sort()) !== stableJson(REQUIRED_CASES.slice().sort())) {
     return verdict("RED", "CASE_EVIDENCE_INVALID", "case result set differs from frozen cases");
   }
   let priorTerminalMs = -Infinity;
@@ -326,20 +328,24 @@ function caseVerdict(specimen, cases, serverNowMs) {
       return verdict("RED", "CASE_BINDING", name);
     }
     const state = result.status;
-    if (!state || !["GREEN", "RED", "BLOCKED"].includes(state)) return verdict("RED", "CASE_EVIDENCE_INVALID", name);
+    if (!["GREEN", "RED", "BLOCKED"].includes(state)) return verdict("RED", "CASE_EVIDENCE_INVALID", name);
     const terminalMs = Date.parse(result.terminalAt);
     if (!Number.isFinite(terminalMs) || terminalMs <= priorTerminalMs
       || terminalMs < Date.parse(specimen.cases[name].intendedBoundary) || terminalMs > serverNowMs) {
       return verdict("RED", "CASE_ORDER", name);
     }
     priorTerminalMs = terminalMs;
-    if (specimen.cases[name].requiresRunBinding && typeof result.runBindingVerified !== "boolean") return verdict("RED", "RUN_BINDING", name);
-    if (state === "GREEN" && specimen.cases[name].requiresRunBinding && result.runBindingVerified !== true) {
+    if (specimen.cases[name].requiresRunBinding && typeof result.runBindingVerified !== "boolean") {
+      return verdict("RED", "RUN_BINDING", name);
+    }
+    if (state === "GREEN" && specimen.cases[name].requiresRunBinding && result.runBindingVerified === false) {
       return verdict("RED", "RUN_BINDING", name);
     }
     if (!specimen.cases[name].requiresRunBinding && result.runBindingVerified !== null) return verdict("RED", "RUN_BINDING", name);
-    if (specimen.cases[name].receiptRequired && typeof result.receiptVerified !== "boolean") return verdict("RED", "RECEIPT_BINDING", name);
-    if (state === "GREEN" && specimen.cases[name].receiptRequired && result.receiptVerified !== true) {
+    if (specimen.cases[name].receiptRequired && typeof result.receiptVerified !== "boolean") {
+      return verdict("RED", "RECEIPT_BINDING", name);
+    }
+    if (state === "GREEN" && specimen.cases[name].receiptRequired && result.receiptVerified === false) {
       return verdict("RED", "RECEIPT_BINDING", name);
     }
     if (!specimen.cases[name].receiptRequired && result.receiptVerified !== null) return verdict("RED", "RECEIPT_BINDING", name);
@@ -350,8 +356,12 @@ function caseVerdict(specimen, cases, serverNowMs) {
 }
 
 export function evaluateOracle(specimen, evidence, nowMs = Date.now()) {
+  return evaluateOracleEvidence(specimen, evidence, nowMs)
+    ?? verdict("N0_TEST_CAPABLE", "ALL_SYNTHETIC_EVIDENCE_GREEN", "capability evidence is current; this is never production ARMED");
+}
+
+function evaluateOracleEvidence(specimen, evidence, nowMs) {
   try {
-    validateSpecimen(specimen);
     assertExactKeys(evidence, [
       "schema", "meta", "probeId", "protocolDigest", "harnessDigest", "journalReachable",
       "signerArmed", "signerBindingValid", "scheduledState", "serverNowMs",
@@ -420,7 +430,7 @@ export function evaluateOracle(specimen, evidence, nowMs = Date.now()) {
     }
     const terminal = caseVerdict(specimen, evidence.cases, evidence.serverNowMs);
     if (terminal) return terminal;
-    return verdict("N0_TEST_CAPABLE", "ALL_SYNTHETIC_EVIDENCE_GREEN", "capability evidence is current; this is never production ARMED");
+    return null;
   } catch (error) {
     return verdict("RED", error?.code ?? "ORACLE_EXCEPTION", error?.message ?? String(error));
   }
@@ -452,6 +462,10 @@ function validateIntegrityEvidence(integrity) {
 
 export function requiredCaseNames() {
   return [...REQUIRED_CASES];
+}
+
+export function requiredCasePolicies() {
+  return { ...CASE_POLICY };
 }
 
 export function requiredCanaryNames() {

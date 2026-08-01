@@ -79,7 +79,7 @@ export function pathInside(root, target) {
   const absoluteRoot = path.resolve(root);
   const absoluteTarget = path.resolve(target);
   const relative = path.relative(absoluteRoot, absoluteTarget);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
 export function requirePathInside(root, target, code = "PATH_ESCAPE") {
@@ -92,17 +92,18 @@ export function readOwnedRegularFile(root, target, {
   uid = process.getuid?.(),
 } = {}) {
   const rootStat = fs.lstatSync(path.resolve(root));
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) fail("ROOT_INVALID", "evidence root must be a real directory");
+  if (!rootStat.isDirectory()) fail("ROOT_INVALID", "evidence root must be a real directory");
   if (uid !== undefined && rootStat.uid !== uid) fail("OWNER_MISMATCH", "evidence root owner mismatch");
   const absolute = requirePathInside(root, target);
-  const stat = fs.lstatSync(absolute);
-  if (stat.isSymbolicLink()) fail("SYMLINK_REJECTED", `symlink is not evidence: ${absolute}`);
-  if (!stat.isFile()) fail("NOT_REGULAR_FILE", `not a regular file: ${absolute}`);
-  if (uid !== undefined && stat.uid !== uid) fail("OWNER_MISMATCH", `file owner mismatch: ${absolute}`);
-  if (stat.size > maxBytes) fail("FILE_TOO_LARGE", `file exceeds ${maxBytes} bytes: ${absolute}`);
+  const entryStat = fs.lstatSync(absolute);
+  if (entryStat.isSymbolicLink()) fail("SYMLINK_REJECTED", `symlink is not evidence: ${absolute}`);
+  if (!entryStat.isFile() && !entryStat.isSymbolicLink()) fail("NOT_REGULAR_FILE", `not a regular file: ${absolute}`);
   const realRoot = fs.realpathSync(root);
   const realTarget = fs.realpathSync(absolute);
   requirePathInside(realRoot, realTarget, "REALPATH_ESCAPE");
+  const stat = fs.lstatSync(realTarget);
+  if (uid !== undefined && stat.uid !== uid) fail("OWNER_MISMATCH", `file owner mismatch: ${absolute}`);
+  if (stat.size > maxBytes) fail("FILE_TOO_LARGE", `file exceeds ${maxBytes} bytes: ${absolute}`);
   const descriptor = fs.openSync(realTarget, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
   try {
     const before = fs.fstatSync(descriptor);

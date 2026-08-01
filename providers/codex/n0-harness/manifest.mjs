@@ -19,6 +19,13 @@ const files = [
   "providers/codex/n0-harness/snapshot.mjs",
   "providers/codex/n0-harness/specimen.mjs",
   "providers/codex/test/n0-harness.test.mjs",
+  "providers/codex/test/n0-guard-census-core.mjs",
+  "providers/codex/test/n0-guard-census.mjs",
+  "providers/codex/test/n0-guard-census.json",
+  "providers/codex/test/n0-guard-census.test.mjs",
+  "providers/codex/test/n0-guard-counterexamples.mjs",
+  "providers/codex/test/n0-guard-mutation-runner.mjs",
+  "providers/codex/test/n0-guard-pair-seed.mjs",
 ];
 
 export function harnessManifest() {

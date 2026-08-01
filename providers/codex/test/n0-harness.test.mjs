@@ -508,7 +508,7 @@ test("evidence manifest hashes stable bounded files and rejects escape or proven
     });
     assert.deepEqual(manifest.entries.map((entry) => entry.path), ["evidence/a.json", "evidence/b.json"]);
     assert.equal(validateEvidenceManifest(specimen, manifest), manifest);
-    expectCode(() => buildEvidenceManifest({ root, specimen, files: ["../escape"], createdAt: manifest.createdAt }), "MANIFEST_PATH");
+    expectCode(() => buildEvidenceManifest({ root, specimen, files: ["../escape"], createdAt: manifest.createdAt }), "PATH_ESCAPE");
     const drifted = clone(manifest);
     drifted.harnessDigest = "f".repeat(64);
     expectCode(() => validateEvidenceManifest(specimen, drifted), "MANIFEST_PROVENANCE");

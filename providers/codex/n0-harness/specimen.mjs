@@ -1,4 +1,4 @@
-import { renderPrompt } from "./prompt.mjs";
+import { renderFrozenPrompt } from "./prompt.mjs";
 import { requiredCaseNames, validateSpecimen } from "./oracle.mjs";
 import { requireNonce, requireSafeInteger, sha256 } from "./lib.mjs";
 
@@ -6,7 +6,7 @@ export function buildSpecimen(input) {
   const specimen = structuredClone(input);
   specimen.prompts = {};
   for (const name of requiredCaseNames()) {
-    const utf8 = renderPrompt(specimen, name);
+    const utf8 = renderFrozenPrompt(specimen, name);
     specimen.prompts[name] = { utf8, sha256: sha256(Buffer.from(utf8, "utf8")) };
   }
   return validateSpecimen(specimen);

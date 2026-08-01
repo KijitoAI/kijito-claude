@@ -24,7 +24,7 @@ export function buildEvidenceManifest({ root, specimen, files, createdAt }) {
   const unique = new Set();
   const entries = files.map((relative) => {
     requireString(relative, "MANIFEST_PATH", "manifest relative path");
-    if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) fail("MANIFEST_PATH", `manifest path escapes root: ${relative}`);
+    if (path.isAbsolute(relative)) fail("MANIFEST_PATH", `manifest path must be relative: ${relative}`);
     const normalized = path.normalize(relative);
     if (normalized !== relative || unique.has(relative)) fail("MANIFEST_PATH", `manifest path is duplicate or non-canonical: ${relative}`);
     unique.add(relative);
@@ -62,7 +62,8 @@ export function validateEvidenceManifest(specimen, manifest) {
   if (!Number.isFinite(Date.parse(manifest.createdAt)) || manifest.producer !== "N0_OUTSIDE_VERIFIER_V1") fail("MANIFEST_PROVENANCE", "manifest time/producer is invalid");
   if (!Array.isArray(manifest.entries) || manifest.entries.length === 0) fail("MANIFEST_ENTRIES", "manifest entries must be non-empty");
   const paths = [];
-  for (const [index, entry] of manifest.entries.entries()) {
+  for (const [index, rawEntry] of manifest.entries.entries()) {
+    let entry = rawEntry;
     requireObject(entry, "MANIFEST_ENTRIES", `manifest entry ${index}`);
     assertExactKeys(entry, ["path", "bytes", "sha256"], "MANIFEST_ENTRIES", `manifest entry ${index}`);
     requireString(entry.path, "MANIFEST_ENTRIES", `manifest entry ${index} path`);

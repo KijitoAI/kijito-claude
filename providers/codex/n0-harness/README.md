@@ -34,6 +34,23 @@ Run the adversarial suite with a healthy Node 18+ runtime:
 node --test providers/codex/test/n0-harness.test.mjs
 ```
 
+The fail-open completeness gate uses an Acorn AST census, exact-source ownership, and one named
+counterexample per executable rejection atom or rejecting-helper call site. Install the pinned
+development dependency and run all three layers:
+
+```sh
+npm ci
+npm run test:n0-census-self
+npm run test:n0-census
+node providers/codex/test/n0-guard-mutation-runner.mjs
+```
+
+The mutation runner copies the harness to an isolated temporary tree, recomputes its aggregate,
+asserts the 27/27 baseline before and after, and requires every pristine counterexample to reject
+with its exact code while only its isolated fail-open mutant accepts. It also verifies that the
+origin HEAD, index, and worktree remain unchanged. Partial census runs are authoring diagnostics,
+never an acceptance gate.
+
 The suite includes every mutation floor in protocol section 7, isolated counterexamples for every
 oracle guard binding, and Assay round-5 hostile fence and run-nonce user-span controls. Passing this
 local suite is author evidence only. The exact unchanged harness commit and manifest digest still

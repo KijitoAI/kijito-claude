@@ -35,6 +35,12 @@
     "kijito"
   ],
   "scripts": {
-    "prepublishOnly": "npm pack --dry-run"
+    "prepublishOnly": "npm pack --dry-run",
+    "test:n0": "node --test providers/codex/test/n0-harness.test.mjs",
+    "test:n0-census": "node providers/codex/test/n0-guard-census.mjs --check",
+    "test:n0-census-self": "node --test providers/codex/test/n0-guard-census.test.mjs"
+  },
+  "devDependencies": {
+    "acorn": "8.18.0"
   }
 }

@@ -23,11 +23,10 @@ function args(argv) {
 
 try {
   const { command, options } = args(process.argv.slice(2));
-  if (!options.root || !path.isAbsolute(options.root)) usage();
+  if (!path.isAbsolute(options.root ?? "")) usage();
   if (command === "snapshot") {
     process.stdout.write(`${JSON.stringify(snapshotTree(options.root))}\n`);
-  } else if (command === "oracle") {
-    if (!options.specimen || !options.evidence) usage();
+  } else if (command === "oracle") { if (!options.specimen || !options.evidence) usage(); options.specimen ??= path.join(options.root, "specimen.json"); options.evidence ??= path.join(options.root, "evidence.json");
     const specimen = parseJsonBuffer(readOwnedRegularFile(options.root, options.specimen).data);
     const evidence = parseJsonBuffer(readOwnedRegularFile(options.root, options.evidence).data);
     const nowMs = options["now-ms"] === undefined ? Date.now() : Number(options["now-ms"]);

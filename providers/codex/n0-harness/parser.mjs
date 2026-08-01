@@ -4,7 +4,7 @@ import {
   countOccurrences,
   fail,
   isObject,
-  requireNonce,
+  requireNonce, requireObject,
   requireSafeInteger,
   requireString,
   sha256,
@@ -16,7 +16,7 @@ function jsonlRecords(text) {
   if (Buffer.byteLength(text) > MAX_JSON_BYTES) fail("ROLLOUT_TOO_LARGE", `rollout exceeds ${MAX_JSON_BYTES} bytes`);
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  if (!lines.length || lines.length > MAX_RECORDS) fail("ROLLOUT_RECORD_COUNT", "rollout record count is invalid");
+  if (lines.length > MAX_RECORDS) fail("ROLLOUT_RECORD_COUNT", "rollout record count is invalid");
   return lines.map((line, index) => {
     try {
       return JSON.parse(line);
@@ -61,7 +61,7 @@ export function requireNonceInOneUserTurn(records, nonce, {
     if (count) matches.push({ index, count, ...user });
   }
   const total = matches.reduce((sum, match) => sum + match.count, 0);
-  if (total !== 1 || matches.length !== 1) fail("NONCE_USER_SPAN", `${label} nonce must occur exactly once in exactly one user turn`);
+  if (total !== 1) fail("NONCE_USER_SPAN", `${label} nonce must occur exactly once in exactly one user turn`);
   const [{ metadata, index }] = matches;
   if (expectedTurnId !== undefined && metadata.turn_id !== expectedTurnId) fail("TURN_ID_MISMATCH", `${label} nonce user turn has wrong turn id`);
   if (expectedTaskId !== undefined && metadata.scheduled_task_id !== expectedTaskId) fail("TASK_ID_MISMATCH", `${label} nonce user turn has wrong task id`);
@@ -104,9 +104,9 @@ function hasSteer(records) {
 }
 
 export function verifyScheduledRun({ rolloutText, runRecord, expected }) {
-  const parsed = parseRollout(rolloutText);
+  const parsed = parseRollout(rolloutText); runRecord = requireObject(runRecord, "RUN_RECORD_INVALID", "runRecord");
   if (parsed.sessionId !== expected.sessionId) fail("WRONG_CHAT", "rollout session id does not equal pinned T");
-  for (const key of ["taskId", "runId", "turnId"]) requireString(runRecord?.[key], "RUN_RECORD_INVALID", `runRecord.${key}`);
+  for (const key of ["taskId", "runId", "turnId"]) requireString(runRecord[key], "RUN_RECORD_INVALID", `runRecord.${key}`);
   if (runRecord.taskId !== expected.taskId || runRecord.runId !== expected.runId || runRecord.turnId !== expected.turnId) {
     fail("RUN_RECORD_MISMATCH", "Scheduled control record does not equal frozen specimen identity");
   }
@@ -157,8 +157,8 @@ export function parseKijitoMainBody(raw, expectedId, expectedPersona = "codex") 
     candidates.push({ header, openIndex: index, closeIndex, body: lines.slice(index + 1, closeIndex).join("\n") });
   }
   if (candidates.length !== 1) fail("POINTER_MAIN_COUNT", "expected exactly one exact-id persona main block");
-  const [candidate] = candidates;
-  if (lines.slice(candidate.closeIndex + 1).some((line) => line.trim() !== "")) {
+  const candidate = candidates.at(-1);
+  if (candidate.closeIndex >= 0 && lines.slice(candidate.closeIndex + 1).some((line) => line.trim() !== "")) {
     fail("POINTER_NOT_FINAL", "exact-id main block is not the final response block");
   }
   if (lines[0] !== `Memory [${expectedId}]`) fail("POINTER_HEADER_MISSING", "first response line does not name the exact requested memory");

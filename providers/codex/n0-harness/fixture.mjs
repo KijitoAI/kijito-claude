@@ -1,5 +1,5 @@
-import { requiredCanaryNames, requiredCaseNames, requiredCasePolicy } from "./oracle.mjs";
-import { renderPrompt } from "./prompt.mjs";
+import { requiredCanaryNames, requiredCaseNames, requiredCasePolicies } from "./oracle.mjs";
+import { renderFrozenPrompt } from "./prompt.mjs";
 import { sha256 } from "./lib.mjs";
 import { harnessManifest } from "./manifest.mjs";
 
@@ -33,6 +33,7 @@ export const PROFILE_CONFIG_UTF8 = [
 ].join("\n");
 
 export function fixtureSpecimen() {
+  const policies = requiredCasePolicies();
   const paths = {
     specimenParent: "/Users/jason/N0-Probes/11111111111111111111111111111111",
     project: "/Users/jason/N0-Probes/11111111111111111111111111111111/project",
@@ -61,7 +62,7 @@ export function fixtureSpecimen() {
     nonce: FIXED.probeId,
   }]));
   const cases = Object.fromEntries(requiredCaseNames().map((name, index) => {
-    const policy = requiredCasePolicy(name);
+    const policy = policies[name];
     const intendedBoundary = new Date(Date.parse("2026-07-30T22:10:00.000Z") + index * 60_000).toISOString();
     return [name, {
       nonce: (index + 16).toString(16).padStart(32, "0"),
@@ -113,7 +114,7 @@ export function fixtureSpecimen() {
     createdAt: "2026-07-30T22:00:00.000Z",
   };
   for (const name of requiredCaseNames()) {
-    const utf8 = renderPrompt(specimen, name);
+    const utf8 = renderFrozenPrompt(specimen, name);
     specimen.prompts[name] = { utf8, sha256: sha256(Buffer.from(utf8, "utf8")) };
   }
   return specimen;
@@ -172,7 +173,7 @@ export function fixtureRunRecord() {
   return { taskId: FIXED.taskId, runId: FIXED.runId, turnId: FIXED.turnId };
 }
 
-export function fixtureExpected(specimen = fixtureSpecimen()) {
+export function fixtureExpected(specimen) {
   return {
     sessionId: FIXED.sessionId,
     taskId: FIXED.taskId,
@@ -217,7 +218,7 @@ export function fixtureMailRecord(rowId = 77, bodyNonce = FIXED.bodyNonce) {
   };
 }
 
-export function fixturePermissionEvidence(specimen = fixtureSpecimen()) {
+export function fixturePermissionEvidence(specimen) {
   return {
     effectiveProfile: "n0-workspace",
     writableRoots: [specimen.paths.project],
@@ -229,7 +230,7 @@ export function fixturePermissionEvidence(specimen = fixtureSpecimen()) {
   };
 }
 
-export function fixtureEvidence(specimen = fixtureSpecimen(), nowMs = Date.parse("2026-07-30T23:10:00.000Z")) {
+export function fixtureEvidence(specimen, nowMs = Date.parse("2026-07-30T23:10:00.000Z")) {
   return {
     schema: "N0_TEST_EVIDENCE_V1",
     meta: {
