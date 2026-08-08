@@ -48,9 +48,12 @@ jobs:
 
       # Runs the actual installer, then asserts the machine matches the repo. This is the step that
       # would have caught the 2026-07-29 drift.
+      # --allow-branch: CI checks out the PR branch and MEANS to install exactly its bytes (drift_test
+      # then asserts machine==repo). The rollout guard refuses a bare off-main install so a fleet seat
+      # cannot SILENTLY converge on a feature branch; CI is the deliberate off-main case, so it opts in.
       - name: install the claude provider, then prove no drift
         run: |
-          ./install.sh
+          ./install.sh --allow-branch
           bash tests/drift_test.sh
 
       - name: codex skills deploy
