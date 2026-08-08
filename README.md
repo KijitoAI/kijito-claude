@@ -48,6 +48,23 @@ its own installer and its own install location.
 ./install.sh --provider codex     # codex  -> ~/.local/share/codex-kijito-hive + ~/.codex/skills
 ```
 
+### Rollout safety on a SHARED checkout
+
+The installer COPIES files into `~/.claude` (a deployed hook is a copy, not a symlink) and reads
+**whatever branch the checkout has checked out**. So on a shared checkout that several seats install
+from, a bare `./install.sh` run while the checkout sits on a feature branch would silently bake that
+branch's in-progress bytes into a seat's hooks. To prevent that, a bare install from a non-`main`
+git checkout is **refused**; choose explicitly:
+
+```bash
+./install.sh --from-main       # install the stable main bytes (recommended for fleet rollout;
+                               # branch-state-immune — installs via a detached worktree at main)
+./install.sh --allow-branch    # deliberately install THIS branch's bytes (e.g. testing your own work)
+```
+
+A packaged install (`npx kijito-claude`, `pipx run kijito-claude`) is not a git checkout, so the
+bytes ARE the release and no flag is needed.
+
 | provider | what it installs | where | needs |
 |---|---|---|---|
 | `claude` | bash lifecycle scripts + the two skills, and merges `settings.json` | `~/.claude` | `bash`, `jq` (`tmux` for autonomy) |

@@ -42,7 +42,11 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq not installed — the installe
 # produces 0600 by accident and this test passes while shipping the bug. Pinning the umask is what
 # makes the check a property of the installer rather than a property of the machine.
 run_install() {  # $1 = installer path, $2 = HOME dir
-  ( umask 002; HOME="$2" bash "$1" >/dev/null 2>&1 )
+  # --allow-branch: this test DELIBERATELY exercises the CURRENT checkout's bytes (that is the whole
+  # point of a permissions test), and CI runs it on a PR branch. Without the opt-in, the top-level
+  # install.sh rollout guard would refuse a bare off-main install — correct for a fleet seat, wrong
+  # for a test that means to install exactly these bytes. It is a harmless no-op on main / non-git.
+  ( umask 002; HOME="$2" bash "$1" --allow-branch >/dev/null 2>&1 )
 }
 
 # One full scenario. $1 = installer to exercise, $2 = label for messages.
@@ -94,7 +98,9 @@ check_installer() {
   mkdir -p "$tmp/c/.claude"
   printf '%s\n' '{"env":{"KIJITO_API_TOKEN":"kjt_TESTVALUE_not_a_real_token"}}' > "$tmp/c/.claude/settings.json"
   chmod 0644 "$tmp/c/.claude/settings.json"
-  ( umask 002; HOME="$tmp/c" bash "$installer" > "$tmp/c/out.log" 2>&1 )
+  # --allow-branch: deliberately install THIS checkout's bytes (see run_install's note); the direct
+  # call here captures out.log, which run_install cannot, so it opts in inline.
+  ( umask 002; HOME="$tmp/c" bash "$installer" --allow-branch > "$tmp/c/out.log" 2>&1 )
   m="$(mode_of "$tmp/c/.claude/settings.json")"
   if [ "$m" = "600" ]; then grn "$label: pre-existing 0644 is tightened to 0600"
   else red "$label: 0644 settings.json left at $m — the token stays world-readable"; bad=1; fi
@@ -109,7 +115,7 @@ check_installer() {
   printf '%s\n' '{"env":{"KIJITO_API_TOKEN":"kjt_TESTVALUE_not_a_real_token"}}' > "$tmp/d/dotfiles/settings.json"
   chmod 0600 "$tmp/d/dotfiles/settings.json"
   ln -s "$tmp/d/dotfiles/settings.json" "$tmp/d/.claude/settings.json"
-  ( umask 002; HOME="$tmp/d" bash "$installer" >/dev/null 2>&1 )
+  ( umask 002; HOME="$tmp/d" bash "$installer" --allow-branch >/dev/null 2>&1 )
   if [ -L "$tmp/d/.claude/settings.json" ]; then grn "$label: symlinked settings.json stays a symlink"
   else red "$label: symlink was REPLACED by a regular file — dotfiles indirection broken, token stranded at the old path"; bad=1; fi
   if jq -e '.statusLine.type == "command"' "$tmp/d/dotfiles/settings.json" >/dev/null 2>&1; then
